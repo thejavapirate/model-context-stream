@@ -1,7 +1,7 @@
 # Default values for model-context-stream.
 
 image:
-  repository: model-context-stream
+  repository: ghcr.io/thejavapirate/model-context-stream
   tag: ""            # defaults to chart appVersion
   pullPolicy: IfNotPresent
 

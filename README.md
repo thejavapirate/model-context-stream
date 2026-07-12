@@ -24,6 +24,24 @@ and a fleet of agents stays mutually context-aware in real time.
 
 ## Quick start
 
+**No clone needed** — prebuilt multi-arch images ship on GHCR:
+
+```sh
+mkdir mcs && cd mcs
+curl -sO https://raw.githubusercontent.com/thejavapirate/model-context-stream/main/docker-compose.yml
+MCS_TOKENS="tok_ops:ops:admin,tok_agent:fleet" docker compose up -d --no-build
+curl -s localhost:3000/healthz
+```
+
+Or on Kubernetes, straight from the OCI registry:
+
+```sh
+helm install mcs oci://ghcr.io/thejavapirate/charts/model-context-stream \
+  --set auth.tokens="tok_ops:ops:admin,tok_agent:fleet"
+```
+
+From a clone (builds locally):
+
 ```sh
 cp .env.example .env          # set MCS_TOKENS
 docker compose up -d --build

@@ -13,6 +13,8 @@ keywords:
   - agents
   - event-driven
   - redis-streams
-home: https://github.com/marshall/model-context-stream
+home: https://github.com/thejavapirate/model-context-stream
+sources:
+  - https://github.com/thejavapirate/model-context-stream
 maintainers:
   - name: Marshall

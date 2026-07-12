@@ -11,6 +11,7 @@ services:
       retries: 10
 
   server:
+    image: ghcr.io/thejavapirate/model-context-stream:latest
     build: .
     ports:
       - "3000:3000"

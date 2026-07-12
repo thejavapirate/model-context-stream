@@ -1,6 +1,6 @@
 {
   "name": "model-context-stream",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A living, event-driven MCP server: model context streams, shared task queue, and versioned protocols for context-aware agent fleets",
   "type": "module",
   "license": "MIT",
