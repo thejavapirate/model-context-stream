@@ -15,7 +15,8 @@ export type ParsedUri =
   | { kind: "stream"; name: string; from?: string }
   | { kind: "tasks-queue" }
   | { kind: "task"; id: string }
-  | { kind: "protocol"; name: string; version?: number };
+  | { kind: "protocol"; name: string; version?: number }
+  | { kind: "agents-online" };
 
 export const uris = {
   stream: (name: string) => `stream://${name}`,
@@ -23,6 +24,7 @@ export const uris = {
   task: (id: string) => `task://${id}`,
   protocol: (name: string, version?: number) =>
     version === undefined ? `protocol://${name}` : `protocol://${name}/v${version}`,
+  agentsOnline: "agents://online",
 };
 
 const URI_RE = /^([a-z]+):\/\/([^/?#]+)(?:\/([^?#]*))?(?:\?(.*))?$/;
@@ -46,6 +48,8 @@ export function parseUri(uri: string): ParsedUri | undefined {
     }
     case "tasks":
       return host === "queue" && !path ? { kind: "tasks-queue" } : undefined;
+    case "agents":
+      return host === "online" && !path ? { kind: "agents-online" } : undefined;
     case "task":
       return path ? undefined : { kind: "task", id: host };
     case "protocol": {

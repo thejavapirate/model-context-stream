@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:e2e
+
+  smoke-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Boot the full stack
+        run: MCS_TOKENS="tok_ci:ci-smoke:admin" docker compose up -d --build --wait
+      - name: Smoke it
+        run: MCS_URL=http://localhost:3000 MCS_TOKEN=tok_ci npm run smoke
+      - name: Metrics sanity
+        run: curl -sf localhost:3000/metrics | grep -q "^mcs_events_published_total"
+      - if: always()
+        run: docker compose down -v
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/model-context-stream
+      - run: helm template mcs deploy/helm/model-context-stream --set auth.tokens="t:a:admin" > /dev/null
+      - run: >-
+          helm template mcs deploy/helm/model-context-stream
+          --set redis.enabled=false --set externalRedisUrl=redis://x:6379
+          --set ingress.enabled=true > /dev/null

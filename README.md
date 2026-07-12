@@ -56,12 +56,44 @@ claude mcp add --transport http context-stream http://localhost:3000/mcp \
 | `task://{id}` | One task record |
 | `protocol://{name}` / `protocol://{name}/v{n}` | Latest / pinned playbook (markdown) |
 
-**Tools:** `publish_event`, `read_stream` (pull fallback, supports `blockMs` long-poll),
-`list_streams` · `create_task`, `claim_task`, `update_task_progress` (doubles as lease heartbeat),
-`complete_task`, `fail_task`, `release_task`, `list_tasks` · `list_protocols`, `get_protocol`,
-`put_protocol` · `whoami`
+| `agents://online` | Live presence roster: connected agents + their claimed tasks |
+
+**Tools:** `publish_event`, `read_stream` (pull fallback: `blockMs` long-poll, `cursor`/`commit`
+durable resume), `commit_cursor`, `list_cursors`, `list_streams` · `create_task`, `claim_task`,
+`update_task_progress` (doubles as lease heartbeat), `complete_task`, `fail_task`, `release_task`,
+`list_tasks` · `list_protocols`, `get_protocol`, `put_protocol` · `list_upstreams` · `whoami`
+
+**Admin tools** (require an `:admin` token): `configure_stream` (retention + digest policy),
+`add_webhook` / `remove_webhook` / `list_webhooks`, `add_upstream` / `remove_upstream`
 
 **Prompts:** `follow_protocol`, `catch_up`
+
+### Tool federation (senses in)
+
+Connect the server to upstream MCP servers once; every agent gets their tools, namespaced
+`{upstream}__{tool}`, with live `tools/list_changed` when the upstream set changes:
+
+```
+add_upstream {name: "github", url: "https://api.githubcopilot.com/mcp/", token: "..."}
+→ every agent now has github__create_pull_request, github__search_issues, …
+```
+
+Upstream outages degrade gracefully (calls return errors, background reconnect with backoff);
+self-federation is refused.
+
+### Outbound webhooks (senses out)
+
+The mirror of ingest — stream events POSTed to external URLs, HMAC-signed (`X-MCS-Signature`),
+type-filterable, with retries and auto-disable after sustained failure (announced on
+`stream://system`). Admin-managed; note the SSRF implication: only admins can point the server
+at URLs.
+
+### Agent-driven compaction (memory hygiene)
+
+Set `configure_stream {stream, digestThreshold: N}` and when the stream grows past N, the server
+creates a **digest task on its own queue**. Any connected agent claims it, follows the seeded
+`stream-digest` protocol (summarize the old range into one `stream.digest` event), and the server
+verifies + trims. The fleet maintains its own memory — no LLM key in the server.
 
 **HTTP ingest** for non-MCP systems (CI, GitHub webhooks, monitoring):
 
@@ -90,6 +122,10 @@ Identity: `X-Agent-Name` header → token-bound name → MCP `clientInfo` → an
 
 ## Development
 
+Working on this repo with a coding agent? **`AGENTS.md`** has the full brief: commands,
+architecture map, hard rules, and the gotchas that have bitten before. `.mcp.json` auto-connects
+Claude Code sessions in this directory to a locally running stack.
+
 ```sh
 npm install
 npm run dev          # tsx watch (needs a local redis, e.g. docker compose up redis)
@@ -103,9 +139,31 @@ npm run typecheck
 
 | Env | Default | Meaning |
 |---|---|---|
-| `MCS_TOKENS` | *(empty = no auth, dev only)* | Comma-separated `token[:agentName]` |
+| `MCS_TOKENS` | *(empty = no auth, dev only — every session is admin)* | Comma-separated `token[:agentName[:admin]]` |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection |
 | `MCS_STREAM_MAXLEN` | `10000` | Per-stream retention (approximate) |
-| `PORT` | `3000` | HTTP port (MCP + ingest + healthz) |
+| `PORT` | `3000` | HTTP port (MCP + ingest + healthz + metrics) |
 
 TLS is a deployment concern — put a reverse proxy in front for anything non-local.
+
+## Operating it (Kubernetes / cloud)
+
+A production Helm chart ships in `deploy/helm/model-context-stream`:
+
+```sh
+helm install mcs deploy/helm/model-context-stream \
+  --set auth.tokens="tok_ops:ops:admin,tok_fleet:agents" \
+  --set image.repository=ghcr.io/you/model-context-stream --set image.tag=0.2.0
+```
+
+- **Bundled Redis** (StatefulSet + PVC + AOF) by default; set `redis.enabled=false` +
+  `externalRedisUrl` for managed Redis.
+- **Prometheus metrics** at `GET /metrics`: `mcs_connected_sessions`, `mcs_events_published_total`,
+  `mcs_tasks{status}`, `mcs_webhook_failed_deliveries_total`, `mcs_streams_compacted_total`,
+  plus process defaults. Scrape annotations are one uncomment away in `values.yaml`.
+- **Scaling posture:** MCP sessions live in server memory — ship `replicaCount: 1`, or enable the
+  documented session-affinity blocks (Service `ClientIP` or nginx-ingress cookie affinity) before
+  scaling out. `NOTES.txt` warns on risky configurations at install time.
+- Hardened defaults: non-root, read-only rootfs, dropped capabilities, liveness/readiness on
+  `/healthz` (which requires a Redis round-trip).
+- Package/publish: `helm package deploy/helm/model-context-stream` → `helm push` to any OCI registry.

@@ -2,10 +2,13 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { SubscribeRequestSchema, UnsubscribeRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { Config } from "../config.js";
+import type { CursorService } from "../core/cursors.js";
 import { eventTypeSchema, streamNameSchema } from "../core/events.js";
 import type { ProtocolService } from "../core/protocols.js";
 import type { StreamService } from "../core/streams.js";
 import { TaskError, type TaskService, type TaskStatus } from "../core/tasks.js";
+import type { WebhookService } from "../core/webhooks.js";
+import type { FederationManager } from "./federation.js";
 import type { ListChangedNotifier } from "./notifier.js";
 import type { SessionRegistry } from "./sessions.js";
 import { uris } from "./uris.js";
@@ -15,8 +18,13 @@ export interface Deps {
   streams: StreamService;
   tasks: TaskService;
   protocols: ProtocolService;
+  cursors: CursorService;
+  webhooks: WebhookService;
+  federation: FederationManager;
   registry: SessionRegistry;
   listChanged: ListChangedNotifier;
+  /** Coalesced tools/list_changed (federation registers/removes proxy tools). */
+  toolsChanged: ListChangedNotifier;
 }
 
 /**
@@ -27,6 +35,8 @@ export interface Deps {
 export interface SessionCtx {
   sessionId?: string;
   agentName: string;
+  /** True when authenticated with an admin-role token (or auth is disabled). */
+  isAdmin: boolean;
 }
 
 function json(data: unknown) {
@@ -46,7 +56,12 @@ const protocolNameSchema = z
 
 /** Build a per-session McpServer wired to the shared services. */
 export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
-  const { streams, tasks, protocols, registry, listChanged } = deps;
+  const { streams, tasks, protocols, cursors, webhooks, federation, registry, listChanged } = deps;
+
+  const requireAdmin = (): ReturnType<typeof errorResult> | undefined => {
+    if (ctx.isAdmin) return undefined;
+    return errorResult(`this tool requires an admin token (agent ${ctx.agentName} is not admin)`);
+  };
 
   const mcp = new McpServer(
     { name: "model-context-stream", version: "0.1.0" },
@@ -112,16 +127,61 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
         "Read events from a stream. Use fromId (exclusive cursor from a previous read) to page " +
         "forward, sinceMs for time-based replay, or neither for the most recent events. " +
         "Set blockMs (max 25000) to long-poll for new events when your client does not support " +
-        "resource subscriptions.",
+        "resource subscriptions. Alternatively pass cursor (a named durable cursor) to resume " +
+        "where you last committed — set commit=true to auto-advance it after this read.",
       inputSchema: {
         stream: streamNameSchema,
         fromId: z.string().optional(),
         sinceMs: z.number().int().positive().optional(),
         limit: z.number().int().min(1).max(1000).default(50),
         blockMs: z.number().int().min(0).max(25_000).optional(),
+        cursor: z.string().max(64).optional(),
+        commit: z.boolean().default(false),
       },
     },
-    async (input) => json(await streams.read(input)),
+    async ({ cursor, commit, ...input }) => {
+      let fromId = input.fromId;
+      if (cursor && !fromId) {
+        // First resume on a fresh cursor replays from the start of retained history.
+        fromId = (await cursors.get(ctx.agentName, input.stream, cursor)) ?? "0-0";
+      }
+      const res = await streams.read({ ...input, ...(fromId ? { fromId } : {}) });
+      let committed: string | undefined;
+      if (cursor && commit && res.nextCursor && res.events.length > 0) {
+        await cursors.commit(ctx.agentName, input.stream, res.nextCursor, cursor);
+        committed = res.nextCursor;
+      }
+      return json({ ...res, ...(cursor ? { cursor, committed: committed ?? null } : {}) });
+    },
+  );
+
+  mcp.registerTool(
+    "commit_cursor",
+    {
+      title: "Commit a durable cursor",
+      description:
+        "Persist your read position on a stream under a named cursor (per-agent, survives " +
+        "reconnects). Use after successfully processing events for at-least-once semantics.",
+      inputSchema: {
+        stream: streamNameSchema,
+        id: z.string().min(1),
+        cursor: z.string().max(64).default("default"),
+      },
+    },
+    async ({ stream, id, cursor }) => {
+      await cursors.commit(ctx.agentName, stream, id, cursor);
+      return json({ stream, cursor, id });
+    },
+  );
+
+  mcp.registerTool(
+    "list_cursors",
+    {
+      title: "List my durable cursors",
+      description: "List this agent's saved stream cursors.",
+      inputSchema: {},
+    },
+    async () => json({ agent: ctx.agentName, cursors: await cursors.list(ctx.agentName) }),
   );
 
   mcp.registerTool(
@@ -320,6 +380,137 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
   );
 
   mcp.registerTool(
+    "configure_stream",
+    {
+      title: "Configure a stream (admin)",
+      description:
+        "Set per-stream retention (maxLen) and compaction (digestThreshold — when the stream " +
+        "grows past it, a digest task is created for an agent to summarize old events; 0 " +
+        "disables). Admin only.",
+      inputSchema: {
+        stream: streamNameSchema,
+        description: z.string().max(1024).optional(),
+        maxLen: z.number().int().min(0).max(1_000_000).optional(),
+        digestThreshold: z.number().int().min(0).max(1_000_000).optional(),
+      },
+    },
+    async ({ stream, ...patch }) => {
+      const denied = requireAdmin();
+      if (denied) return denied;
+      return json(await streams.updateMeta(stream, patch, ctx.agentName));
+    },
+  );
+
+  // ── Webhook tools (admin) ─────────────────────────────────────────────────
+  mcp.registerTool(
+    "add_webhook",
+    {
+      title: "Add an outbound webhook (admin)",
+      description:
+        "POST every event on a stream to an external URL (optionally filtered by event types, " +
+        "HMAC-signed with X-MCS-Signature when a secret is set). Admin only.",
+      inputSchema: {
+        stream: streamNameSchema,
+        url: z.string().url().max(2048),
+        secret: z.string().max(256).optional(),
+        types: z.array(eventTypeSchema).max(32).optional(),
+      },
+    },
+    async ({ stream, url, secret, types }) => {
+      const denied = requireAdmin();
+      if (denied) return denied;
+      const hook = await webhooks.add({
+        stream,
+        url,
+        ...(secret ? { secret } : {}),
+        ...(types ? { types } : {}),
+        createdBy: ctx.agentName,
+      });
+      const { secret: _redacted, ...safe } = hook;
+      return json({ ...safe, hasSecret: Boolean(secret) });
+    },
+  );
+
+  mcp.registerTool(
+    "remove_webhook",
+    {
+      title: "Remove an outbound webhook (admin)",
+      description: "Delete a webhook by id. Admin only.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const denied = requireAdmin();
+      if (denied) return denied;
+      const removed = await webhooks.remove(id);
+      return removed ? json({ removed: id }) : errorResult(`webhook ${id} not found`);
+    },
+  );
+
+  mcp.registerTool(
+    "list_webhooks",
+    {
+      title: "List outbound webhooks (admin)",
+      description: "List configured webhooks (secrets redacted). Admin only.",
+      inputSchema: {},
+    },
+    async () => {
+      const denied = requireAdmin();
+      if (denied) return denied;
+      return json({ webhooks: webhooks.list() });
+    },
+  );
+
+  // ── Federation tools ──────────────────────────────────────────────────────
+  mcp.registerTool(
+    "add_upstream",
+    {
+      title: "Federate an upstream MCP server (admin)",
+      description:
+        "Connect this server to an upstream MCP server and re-expose its tools to every " +
+        "connected agent, namespaced as {name}__{tool}. Admin only.",
+      inputSchema: {
+        name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9-]{0,31}$/, "letters/digits/hyphens, no underscores"),
+        url: z.string().url().max(2048),
+        token: z.string().max(512).optional(),
+      },
+    },
+    async ({ name, url, token }) => {
+      const denied = requireAdmin();
+      if (denied) return denied;
+      try {
+        return json(await federation.addUpstream({ name, url, ...(token ? { token } : {}), addedBy: ctx.agentName }));
+      } catch (err) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    },
+  );
+
+  mcp.registerTool(
+    "remove_upstream",
+    {
+      title: "Remove a federated upstream (admin)",
+      description: "Disconnect an upstream MCP server and remove its proxied tools from every session. Admin only.",
+      inputSchema: { name: z.string() },
+    },
+    async ({ name }) => {
+      const denied = requireAdmin();
+      if (denied) return denied;
+      const removed = await federation.removeUpstream(name);
+      return removed ? json({ removed: name }) : errorResult(`upstream ${name} not found`);
+    },
+  );
+
+  mcp.registerTool(
+    "list_upstreams",
+    {
+      title: "List federated upstream MCP servers",
+      description: "Show federated upstreams with connection status and tool counts (tokens never shown).",
+      inputSchema: {},
+    },
+    async () => json({ upstreams: federation.listUpstreams() }),
+  );
+
+  mcp.registerTool(
     "whoami",
     {
       title: "Who am I",
@@ -391,6 +582,40 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
             uri: uri.toString(),
             mimeType: "application/json",
             text: JSON.stringify({ stream: name, latestId: nextCursor, count: events.length, events }, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  mcp.registerResource(
+    "agents-online",
+    uris.agentsOnline,
+    {
+      title: "Online agents",
+      description:
+        "Live roster: every connected agent, when it connected, what it's subscribed to, and " +
+        "which tasks it currently holds. Subscribe for presence changes.",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      const active = await tasks.list({ limit: 500 });
+      const roster = registry.all().map((s) => ({
+        agent: s.agentName,
+        sessionId: s.id,
+        connectedAt: s.connectedAt,
+        lastSeenAt: new Date(s.lastSeenAt).toISOString(),
+        subscriptions: [...s.subscriptions.keys()],
+        claimedTasks: active
+          .filter((t) => (t.status === "claimed" || t.status === "in_progress") && t.claimedBy === s.agentName)
+          .map((t) => ({ id: t.id, title: t.title, status: t.status })),
+      }));
+      return {
+        contents: [
+          {
+            uri: uri.toString(),
+            mimeType: "application/json",
+            text: JSON.stringify({ count: roster.length, agents: roster }, null, 2),
           },
         ],
       };

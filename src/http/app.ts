@@ -2,6 +2,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import express, { type Express, type Response } from "express";
 import { nanoid } from "nanoid";
+import { registry } from "../metrics.js";
 import { buildMcpServer, type Deps, type SessionCtx } from "../mcp/server.js";
 import { bearerAuth, type AuthedRequest } from "./auth.js";
 import { ingestHandler } from "./ingest.js";
@@ -21,12 +22,18 @@ export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express
     res.status(ok ? 200 : 503).json({ ok, sessions: deps.registry.all().length });
   });
 
+  app.get("/metrics", async (_req, res) => {
+    res.set("content-type", registry.contentType);
+    res.send(await registry.metrics());
+  });
+
   const auth = bearerAuth(deps.config);
   app.post("/ingest/:stream", auth, ingestHandler(deps.streams, deps.listChanged));
 
   const cleanup = (sessionId: string) => {
     transports.delete(sessionId);
     deps.listChanged.unregister(sessionId);
+    deps.toolsChanged.unregister(sessionId);
     deps.registry.remove(sessionId);
   };
 
@@ -53,8 +60,17 @@ export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express
 
     // New sessions start with an initialize POST and no session header.
     if (req.method === "POST" && !sessionId && isInitializeRequest(req.body)) {
-      const ctx: SessionCtx = { agentName: resolveAgentName(req, req.body) };
+      const ctx: SessionCtx = {
+        agentName: resolveAgentName(req, req.body),
+        isAdmin: req.tokenRole === "admin",
+      };
       const mcp = buildMcpServer(deps, ctx);
+
+      // Federated proxy tools: register current set (silent — not connected yet),
+      // and coalesce all future tools/list_changed bursts through the shared notifier.
+      const attachment = deps.federation.attach(mcp);
+      const rawToolsChanged = mcp.sendToolListChanged.bind(mcp);
+      mcp.sendToolListChanged = () => deps.toolsChanged.enqueue();
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => nanoid(),
@@ -69,14 +85,17 @@ export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express
             close: () => void transport.close().catch(() => {}),
           });
           deps.listChanged.register(id, async () => mcp.sendResourceListChanged());
+          deps.toolsChanged.register(id, async () => rawToolsChanged());
           console.log(`[mcp] session ${id} connected (${ctx.agentName})`);
         },
         onsessionclosed: (id) => {
           console.log(`[mcp] session ${id} closed`);
+          deps.federation.detach(attachment);
           cleanup(id);
         },
       });
       transport.onclose = () => {
+        deps.federation.detach(attachment);
         if (transport.sessionId) cleanup(transport.sessionId);
       };
 

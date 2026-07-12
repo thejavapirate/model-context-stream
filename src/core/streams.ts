@@ -1,4 +1,5 @@
 import { Redis } from "ioredis";
+import { metrics } from "../metrics.js";
 import { keys } from "../redis/keys.js";
 import { StreamEvent, fromEntry, toEntryFields } from "./events.js";
 
@@ -8,6 +9,8 @@ export interface StreamMeta {
   createdAt: string;
   createdBy: string;
   maxLen?: number;
+  /** When set, the digest scheduler compacts this stream past this length. */
+  digestThreshold?: number;
 }
 
 export interface PublishResult {
@@ -52,6 +55,8 @@ export class StreamService {
       "*",
       ...fields,
     )) as string;
+
+    metrics.eventsPublished.inc();
 
     return {
       event: {
@@ -159,4 +164,31 @@ export class StreamService {
     const inserted = await this.redis.hsetnx(keys.streamRegistry, name, JSON.stringify(meta));
     return inserted === 1;
   }
+
+  /** Merge a patch into a stream's registry metadata (creates the stream if new). */
+  async updateMeta(
+    name: string,
+    patch: Partial<Pick<StreamMeta, "description" | "maxLen" | "digestThreshold">>,
+    updatedBy: string,
+  ): Promise<StreamMeta> {
+    await this.ensureRegistered(name, updatedBy);
+    const current = (await this.getMeta(name)) ?? { name, createdAt: new Date().toISOString(), createdBy: updatedBy };
+    const { name: _n, ...rest } = { ...current, ...patch };
+    // Explicit nulls-by-zero: a 0 threshold/maxLen removes the setting.
+    if (patch.digestThreshold === 0) delete (rest as Record<string, unknown>).digestThreshold;
+    if (patch.maxLen === 0) delete (rest as Record<string, unknown>).maxLen;
+    await this.redis.hset(keys.streamRegistry, name, JSON.stringify(rest));
+    return { name, ...rest };
+  }
+
+  /** Trim everything up to AND INCLUDING `toId` (exact, not approximate). */
+  async trimThrough(name: string, toId: string): Promise<number> {
+    return this.redis.xtrim(keys.stream(name), "MINID", incrementEntryId(toId));
+  }
+}
+
+/** "123-4" → "123-5": the smallest id strictly greater than the input. */
+export function incrementEntryId(id: string): string {
+  const [ms, seq] = id.split("-");
+  return `${ms}-${BigInt(seq ?? "0") + 1n}`;
 }

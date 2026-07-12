@@ -74,7 +74,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
 
   try {
     // ── Check 1: publish → live resources/updated notification → replay ────
-    log(`[1/3] live notification on ${streamUri}`);
+    log(`[1/5] live notification on ${streamUri}`);
     await b.client.subscribeResource({ uri: streamUri });
     await b.client.subscribeResource({ uri: "tasks://queue" });
 
@@ -96,7 +96,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: B was notified and replayed A's event (cid + source intact)");
 
     // ── Check 2: claim race — exactly one winner ────────────────────────────
-    log("[2/3] task claim race");
+    log("[2/5] task claim race");
     const created = toolJson<{ id: string }>(
       await a.client.callTool({
         name: "create_task",
@@ -130,7 +130,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: exactly one winner; full lifecycle visible on stream://tasks");
 
     // ── Check 3: HTTP ingest → subscribed agent notified ────────────────────
-    log("[3/3] HTTP ingest");
+    log("[3/5] HTTP ingest");
     const beforeIngest = b.notifications.filter((u) => u === streamUri).length;
     const res = await fetch(`${target.baseUrl}/ingest/${streamName}`, {
       method: "POST",
@@ -150,6 +150,55 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     if (!ingested) throw new Error("ingested event not readable");
     if (!ingested.source.startsWith("ingest:")) throw new Error(`ingest source mis-stamped: ${ingested.source}`);
     log("      ok: external event ingested, fanned out, source stamped");
+
+    // ── Check 4: presence — agents://online roster ──────────────────────────
+    log("[4/5] presence roster");
+    const roster = await b.client.readResource({ uri: "agents://online" });
+    const rosterJson = JSON.parse(
+      (roster.contents as Array<{ text?: string }>)[0]!.text ?? "{}",
+    ) as { agents: Array<{ agent: string }> };
+    for (const name of ["smoke-agent-a", "smoke-agent-b"]) {
+      if (!rosterJson.agents.some((x) => x.agent === name)) {
+        throw new Error(`agents://online missing ${name}`);
+      }
+    }
+    log("      ok: both agents visible on agents://online");
+
+    // ── Check 5: durable cursors ────────────────────────────────────────────
+    log("[5/5] durable cursors");
+    const cursorStream = `${streamName}-cur`;
+    for (let i = 0; i < 3; i++) {
+      await a.client.callTool({
+        name: "publish_event",
+        arguments: { stream: cursorStream, type: "seq.item", payload: { i } },
+      });
+    }
+    const firstRead = toolJson<{ events: unknown[]; committed: string | null }>(
+      await b.client.callTool({
+        name: "read_stream",
+        arguments: { stream: cursorStream, cursor: "proc", commit: true },
+      }),
+    );
+    if (firstRead.events.length !== 3) throw new Error(`cursor first read: expected 3, got ${firstRead.events.length}`);
+    if (!firstRead.committed) throw new Error("cursor did not commit");
+
+    for (let i = 3; i < 5; i++) {
+      await a.client.callTool({
+        name: "publish_event",
+        arguments: { stream: cursorStream, type: "seq.item", payload: { i } },
+      });
+    }
+    const secondRead = toolJson<{ events: Array<{ payload: { i: number } }> }>(
+      await b.client.callTool({
+        name: "read_stream",
+        arguments: { stream: cursorStream, cursor: "proc", commit: true },
+      }),
+    );
+    if (secondRead.events.length !== 2) {
+      throw new Error(`cursor resume: expected exactly the 2 new events, got ${secondRead.events.length}`);
+    }
+    if (secondRead.events[0]!.payload.i !== 3) throw new Error("cursor resumed at the wrong position");
+    log("      ok: cursor committed, resumed exactly at the right offset");
 
     log("smoke: ALL CHECKS PASSED");
   } finally {

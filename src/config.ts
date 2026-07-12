@@ -7,32 +7,34 @@ const envSchema = z.object({
   MCS_TOKENS: z.string().default(""),
 });
 
+export type TokenRole = "admin" | "agent";
+
 export interface TokenEntry {
-  token: string;
   agentName?: string;
+  role: TokenRole;
 }
 
 export interface Config {
   port: number;
   redisUrl: string;
   streamMaxLen: number;
-  /** token -> optional bound agent name */
-  tokens: Map<string, string | undefined>;
+  /** token -> bound identity/role. Format: token[:agentName[:admin]] */
+  tokens: Map<string, TokenEntry>;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = envSchema.parse(env);
 
-  const tokens = new Map<string, string | undefined>();
+  const tokens = new Map<string, TokenEntry>();
   for (const entry of parsed.MCS_TOKENS.split(",")) {
     const trimmed = entry.trim();
     if (!trimmed) continue;
-    const sep = trimmed.indexOf(":");
-    if (sep === -1) {
-      tokens.set(trimmed, undefined);
-    } else {
-      tokens.set(trimmed.slice(0, sep), trimmed.slice(sep + 1) || undefined);
-    }
+    const [token, agentName, role] = trimmed.split(":");
+    if (!token) continue;
+    tokens.set(token, {
+      ...(agentName ? { agentName } : {}),
+      role: role === "admin" ? "admin" : "agent",
+    });
   }
 
   return {

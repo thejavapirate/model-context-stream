@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.env
+*.log
+test
+scripts
+deploy
+.claude
+.mcp.json
+README.md
+AGENTS.md
+CLAUDE.md
+LICENSE

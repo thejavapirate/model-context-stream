@@ -1,4 +1,5 @@
 import { Fanout } from "../core/fanout.js";
+import type { StreamService } from "../core/streams.js";
 import { SYSTEM_STREAMS } from "../redis/keys.js";
 import { SessionNotifier } from "./notifier.js";
 import { parseUri } from "./uris.js";
@@ -21,7 +22,22 @@ export class SessionRegistry {
   private sessions = new Map<string, Session>();
   private sweeper?: NodeJS.Timeout;
 
-  constructor(private readonly fanout: Fanout) {}
+  constructor(
+    private readonly fanout: Fanout,
+    private readonly streams?: StreamService,
+  ) {}
+
+  /** Presence events are best-effort: registry mutations never fail on Redis. */
+  private emitPresence(type: "agent.connected" | "agent.disconnected", session: Session): void {
+    void this.streams
+      ?.publish({
+        stream: SYSTEM_STREAMS.agents,
+        type,
+        source: "system",
+        payload: { agent: session.agentName, sessionId: session.id },
+      })
+      .catch((err) => console.error("[sessions] presence publish failed:", err?.message ?? err));
+  }
 
   add(input: {
     id: string;
@@ -39,6 +55,7 @@ export class SessionRegistry {
       close: input.close,
     };
     this.sessions.set(input.id, session);
+    this.emitPresence("agent.connected", session);
     return session;
   }
 
@@ -87,6 +104,16 @@ export class SessionRegistry {
           if (event.payload.name === parsed.name) session.notifier.enqueue(uri);
         });
         break;
+      case "agents-online": {
+        // Roster content changes on connects/disconnects AND on task claims.
+        const unsubA = await this.fanout.subscribe(SYSTEM_STREAMS.agents, () => session.notifier.enqueue(uri));
+        const unsubB = await this.fanout.subscribe(SYSTEM_STREAMS.tasks, () => session.notifier.enqueue(uri));
+        unsubscribe = () => {
+          unsubA();
+          unsubB();
+        };
+        break;
+      }
     }
     if (!unsubscribe) return false;
     session.subscriptions.set(uri, unsubscribe);
@@ -109,6 +136,7 @@ export class SessionRegistry {
     session.subscriptions.clear();
     session.notifier.close();
     this.sessions.delete(id);
+    this.emitPresence("agent.disconnected", session);
   }
 
   startIdleSweeper(): void {

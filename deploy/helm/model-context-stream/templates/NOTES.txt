@@ -1,0 +1,33 @@
+model-context-stream {{ .Chart.AppVersion }} deployed.
+
+MCP endpoint (Streamable HTTP), in-cluster:
+  http://{{ include "mcs.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/mcp
+
+Try it locally:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mcs.fullname" . }} 3000:{{ .Values.service.port }}
+  curl -s localhost:3000/healthz
+
+Connect an agent (Claude Code):
+  claude mcp add --transport http context-stream http://localhost:3000/mcp \
+    --header "Authorization: Bearer <token>" --header "X-Agent-Name: my-agent"
+
+Ingest events from CI/webhooks:
+  curl -X POST http://localhost:3000/ingest/deployments \
+    -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+    -d '{"type":"ci.build.failed","payload":{"repo":"api"}}'
+
+Prometheus metrics: GET /metrics
+{{- if not .Values.auth.tokens }}
+{{- if not .Values.auth.existingSecret }}
+
+WARNING: auth.tokens is empty — the server is running WITHOUT authentication
+and every session has admin rights. Set auth.tokens or auth.existingSecret
+before exposing this service.
+{{- end }}
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+
+WARNING: replicaCount > 1 — MCP sessions are held in server memory. Make sure
+service.sessionAffinity (or cookie-based ingress affinity) is configured, or
+sessions will break when requests land on different pods.
+{{- end }}

@@ -1,0 +1,18 @@
+apiVersion: v2
+name: model-context-stream
+description: >-
+  A living, event-driven MCP server: model context streams, a shared task
+  queue with atomic claims, versioned protocols, MCP tool federation,
+  webhooks, and agent presence — for context-aware agent fleets.
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords:
+  - mcp
+  - model-context-protocol
+  - agents
+  - event-driven
+  - redis-streams
+home: https://github.com/marshall/model-context-stream
+maintainers:
+  - name: Marshall

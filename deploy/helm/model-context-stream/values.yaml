@@ -1,0 +1,105 @@
+# Default values for model-context-stream.
+
+image:
+  repository: model-context-stream
+  tag: ""            # defaults to chart appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# MCP sessions live in server memory. Keep replicaCount at 1 unless you also
+# enable session affinity below AND your load balancer honors it end-to-end
+# (client IP affinity breaks behind some proxies/LBs; cookie-based ingress
+# affinity is more reliable — see ingress.annotations example).
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 3000
+  # Uncomment for multi-replica deployments (see replicaCount note):
+  # sessionAffinity: ClientIP
+  # sessionAffinityConfig:
+  #   clientIP:
+  #     timeoutSeconds: 10800
+
+auth:
+  # Comma-separated "token[:agentName[:admin]]" entries, e.g.
+  #   tokens: "tok_ops:ops-console:admin,tok_ci:github-ci,tok_agents"
+  # Leave empty ONLY for isolated dev clusters — empty means no auth and
+  # every session gets admin.
+  tokens: ""
+  # Or reference an existing Secret with key MCS_TOKENS (takes precedence):
+  existingSecret: ""
+
+redis:
+  # Deploy a bundled single-node Redis (StatefulSet + PVC, AOF persistence).
+  # For production, prefer a managed Redis and set externalUrl instead.
+  enabled: true
+  image: redis:7-alpine
+  storage: 1Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# Used when redis.enabled=false, e.g. redis://my-elasticache:6379
+externalRedisUrl: ""
+
+config:
+  # Default per-stream retention (approximate trim).
+  streamMaxLen: 10000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # Recommended with nginx-ingress for multi-replica setups (cookie affinity):
+    # nginx.ingress.kubernetes.io/affinity: "cookie"
+    # nginx.ingress.kubernetes.io/session-cookie-name: "mcs-affinity"
+    # SSE-friendly timeouts (MCP notification streams are long-lived):
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts:
+    - host: mcs.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: mcs-tls
+    #   hosts: [mcs.example.com]
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+  # Scrape metrics with the Prometheus operator or annotations:
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "3000"
+  # prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

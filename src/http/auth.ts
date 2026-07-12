@@ -1,10 +1,12 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
-import type { Config } from "../config.js";
+import type { Config, TokenRole } from "../config.js";
 
 export interface AuthedRequest extends Request {
   /** Agent name bound to the presented token, if any. */
   tokenAgent?: string;
+  /** Role of the presented token. With auth disabled (dev), everything is admin. */
+  tokenRole?: TokenRole;
 }
 
 function tokenMatches(presented: string, known: string): boolean {
@@ -21,6 +23,7 @@ function tokenMatches(presented: string, known: string): boolean {
 export function bearerAuth(config: Config) {
   return (req: AuthedRequest, res: Response, next: NextFunction): void => {
     if (config.tokens.size === 0) {
+      req.tokenRole = "admin"; // open dev mode: everything is admin
       next();
       return;
     }
@@ -29,9 +32,10 @@ export function bearerAuth(config: Config) {
     const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
 
     if (presented) {
-      for (const [token, agentName] of config.tokens) {
+      for (const [token, entry] of config.tokens) {
         if (tokenMatches(presented, token)) {
-          if (agentName) req.tokenAgent = agentName;
+          if (entry.agentName) req.tokenAgent = entry.agentName;
+          req.tokenRole = entry.role;
           next();
           return;
         }

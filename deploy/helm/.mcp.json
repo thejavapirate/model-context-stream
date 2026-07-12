@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "context-stream": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer tok_agent",
+        "X-Agent-Name": "agent-marshall"
+      }
+    }
+  }
+}

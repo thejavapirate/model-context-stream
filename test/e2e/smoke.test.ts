@@ -2,7 +2,10 @@ import { RedisContainer, StartedRedisContainer } from "@testcontainers/redis";
 import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import { loadConfig } from "../../src/config.js";
+import { CursorService } from "../../src/core/cursors.js";
 import { Fanout } from "../../src/core/fanout.js";
+import { WebhookService } from "../../src/core/webhooks.js";
+import { FederationManager } from "../../src/mcp/federation.js";
 import { ProtocolService } from "../../src/core/protocols.js";
 import { StreamService } from "../../src/core/streams.js";
 import { TaskService } from "../../src/core/tasks.js";
@@ -34,16 +37,25 @@ beforeAll(async () => {
   const streams = new StreamService(redis.main, config.streamMaxLen, url);
   tasks = new TaskService(redis.main, streams);
   const protocols = new ProtocolService(redis.main, streams);
+  const cursors = new CursorService(redis.main);
 
   fanout = new Fanout(redis.blocking, redis.main);
   fanout.start();
-  registry = new SessionRegistry(fanout);
+  registry = new SessionRegistry(fanout, streams);
   listChanged = new ListChangedNotifier();
+  const toolsChanged = new ListChangedNotifier();
+  const webhooks = new WebhookService(redis.main, fanout, streams);
+  await webhooks.start();
+  const federation = new FederationManager(redis.main, config, toolsChanged);
+  await federation.start();
   tasks.startReaper();
 
-  const app = buildApp({ config, streams, tasks, protocols, registry, listChanged }, async () => {
-    return (await redis.main.ping()) === "PONG";
-  });
+  const app = buildApp(
+    { config, streams, tasks, protocols, cursors, webhooks, federation, registry, listChanged, toolsChanged },
+    async () => {
+      return (await redis.main.ping()) === "PONG";
+    },
+  );
   server = app.listen(0);
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no port");

@@ -24,12 +24,25 @@ export const keys = {
   protocolHead: (name: string) => `${PREFIX}:protocol:${name}`,
   /** Set: protocol names. */
   protocolRegistry: `${PREFIX}:protocols`,
+
+  /** Hash: durable per-agent read cursors; field "{stream}::{cursorName}" -> entry id. */
+  cursors: (agentName: string) => `${PREFIX}:cursors:${agentName}`,
+  /** Hash: webhook id -> JSON definition. */
+  webhooks: `${PREFIX}:webhooks`,
+  /** String marker: an open digest task for a stream (value = taskId, with TTL). */
+  digestOpen: (stream: string) => `${PREFIX}:digest:open:${stream}`,
+  /** Hash: upstream MCP server name -> JSON definition (federation). */
+  upstreams: `${PREFIX}:upstreams`,
 } as const;
 
 /** Reserved stream names that carry system lifecycle events. */
 export const SYSTEM_STREAMS = {
   tasks: "tasks",
   protocols: "protocols",
+  /** Agent connect/disconnect events (presence). */
+  agents: "agents",
+  /** Server housekeeping: webhook.disabled, stream.compacted, upstream.* */
+  system: "system",
 } as const;
 
 /** Extract the stream name back out of a stream key. */
