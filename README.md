@@ -6,7 +6,7 @@ an event, every subscribed agent gets an MCP `resources/updated` notification an
 context. Add a shared **task queue** (atomic claims, leases) and versioned **protocols** (playbooks),
 and a fleet of agents stays mutually context-aware in real time.
 
-📖 **The story and design rationale:** [A Living, Breathing MCP Server](https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc)
+**Medium Link:** [A Living, Breathing MCP Server](https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc)
 
 ```
   agent A ──publish──▶ ┌───────────────────────┐ ──notify──▶ agent B
