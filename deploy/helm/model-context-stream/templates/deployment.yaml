@@ -13,6 +13,7 @@ spec:
     metadata:
       labels:
         {{- include "mcs.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}

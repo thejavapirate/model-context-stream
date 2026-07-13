@@ -1,0 +1,115 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny for every pod in this release's namespace, then allow only what
+# the app needs. Kubernetes namespaces are NOT a network boundary by default —
+# without this, pods in other namespaces can reach this release's server and
+# Redis directly. Turn this on for any multi-tenant / shared-cluster install.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mcs.fullname" . }}-default-deny
+  labels:
+    {{- include "mcs.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Server: accept HTTP from allowed sources; talk to Redis, DNS, and the internet
+# (federation upstreams, outbound webhooks).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mcs.fullname" . }}-server
+  labels:
+    {{- include "mcs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mcs.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingressFrom }}
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+        {{- else }}
+        # Default: same namespace only. Add your ingress-controller namespace to
+        # networkPolicy.ingressFrom when exposing the service externally.
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.redis.enabled }}
+    # Bundled Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "mcs.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+    {{- if .Values.networkPolicy.allowExternalEgress }}
+    # External egress: MCP federation upstreams, outbound webhooks, external Redis.
+    # Blocks RFC1918 so a webhook/upstream URL can't be pointed at cluster-internal
+    # services (SSRF guard). Widen or narrow to taste.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.169.254/32
+    {{- end }}
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- if .Values.redis.enabled }}
+---
+# Redis: only the server may connect; egress limited to DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mcs.fullname" . }}-redis
+  labels:
+    {{- include "mcs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mcs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "mcs.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}
+{{- end }}

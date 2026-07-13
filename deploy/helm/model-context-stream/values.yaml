@@ -16,6 +16,13 @@ replicaCount: 1
 service:
   type: ClusterIP
   port: 3000
+  annotations: {}
+  # With type: LoadBalancer, restrict who can reach the LB at the cloud firewall
+  # (AWS programs the ELB security group; GCP/Azure equivalents apply). Strongly
+  # recommended for any internet-facing test deployment — bearer tokens are then
+  # the second layer, not the only one.
+  #   loadBalancerSourceRanges: ["203.0.113.4/32"]
+  loadBalancerSourceRanges: []
   # Uncomment for multi-replica deployments (see replicaCount note):
   # sessionAffinity: ClientIP
   # sessionAffinityConfig:
@@ -32,10 +39,15 @@ auth:
   existingSecret: ""
 
 redis:
-  # Deploy a bundled single-node Redis (StatefulSet + PVC, AOF persistence).
-  # For production, prefer a managed Redis and set externalUrl instead.
+  # Deploy a bundled single-node Redis (StatefulSet, AOF persistence).
+  # For production, prefer a managed Redis and set externalRedisUrl instead.
   enabled: true
   image: redis:7-alpine
+  # persistence.enabled=false uses an emptyDir instead of a PersistentVolumeClaim:
+  # no StorageClass / CSI driver required, but stream history is lost if the Redis
+  # pod is rescheduled. Use only for demos and ephemeral test clusters.
+  persistence:
+    enabled: true
   storage: 1Gi
   storageClassName: ""
   resources:
@@ -51,6 +63,25 @@ externalRedisUrl: ""
 config:
   # Default per-stream retention (approximate trim).
   streamMaxLen: 10000
+
+# Kubernetes namespaces are NOT a network boundary by default: without a
+# NetworkPolicy, pods in other namespaces can reach this release's server and
+# Redis directly. Enable this for shared or multi-tenant clusters (requires a
+# CNI that enforces NetworkPolicy — Calico, Cilium; the EKS default VPC CNI does
+# NOT enforce them without the Calico/Cilium add-on).
+networkPolicy:
+  enabled: false
+  # Who may reach the server on :3000. Default (empty) = same namespace only.
+  # To allow an ingress controller, add its namespace, e.g.:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
+  ingressFrom: []
+  # Needed for MCP federation upstreams, outbound webhooks, and external Redis.
+  # Allows public egress but blocks RFC1918 + link-local (SSRF guard).
+  allowExternalEgress: true
+  # Extra egress rules appended verbatim (e.g. a managed Redis CIDR).
+  extraEgress: []
 
 ingress:
   enabled: false
