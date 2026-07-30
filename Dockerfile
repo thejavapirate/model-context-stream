@@ -2,7 +2,10 @@
 FROM node:22-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# --ignore-scripts: the build stage only needs tsc, and dependency postinstall
+# hooks are both a supply-chain risk and a cross-arch flake (esbuild's installer
+# spawns its own binary → ETXTBSY under QEMU on linux/arm64).
+RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
@@ -11,7 +14,7 @@ RUN npm run build
 FROM node:22-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 # ── runtime: distroless — no shell, no perl, no npm, no package manager ──────
 # Removes the entire Debian userland CVE surface (perl, gzip, util-linux, …)

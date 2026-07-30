@@ -13,6 +13,11 @@ publishes the multi-arch image and Helm chart to GHCR — see `AGENTS.md`.
 
 ### Fixed
 
+- **Release build**: `npm ci --ignore-scripts` in both image stages. The multi-arch
+  build broke on `linux/arm64` because esbuild's postinstall spawns the binary it just
+  wrote (`ETXTBSY` under QEMU); the build stage only needs `tsc`, and skipping
+  dependency postinstall hooks removes a supply-chain surface as well.
+
 - **fleet-kit standby**: only *actionable* event types re-wake an idle session
   (`MCS_STANDBY_TYPES`, default `task.created,task.expired,review.requested`).
   Previously one informational broadcast re-woke every idle agent, costing N paid
