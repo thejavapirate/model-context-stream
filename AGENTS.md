@@ -8,7 +8,7 @@ context-aware. Read `README.md` for the product story; this file is how to *work
 ## Setup from a blank clone
 
 ```sh
-npm install                      # Node >= 20
+npm install                      # Node >= 22 (testcontainers/undici require it; runtime image is node 22)
 docker compose up -d redis       # local Redis for `npm run dev`
 npm run dev                      # tsx watch, http://localhost:3000
 ```

@@ -39,9 +39,16 @@ spec:
         runAsNonRoot: true
         runAsUser: 999
         fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
           image: {{ .Values.redis.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true # redis only writes /data (mounted below)
+            capabilities:
+              drop: ["ALL"]
           args: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
           ports:
             - name: redis

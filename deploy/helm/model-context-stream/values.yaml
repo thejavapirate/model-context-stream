@@ -58,6 +58,7 @@ redis:
       cpu: 100m
       memory: 128Mi
     limits:
+      cpu: 500m
       memory: 512Mi
 
 # Used when redis.enabled=false, e.g. redis://my-elasticache:6379
@@ -110,6 +111,7 @@ resources:
     cpu: 250m
     memory: 256Mi
   limits:
+    cpu: "1"
     memory: 1Gi
 
 serviceAccount:
@@ -125,8 +127,10 @@ podAnnotations: {}
 
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 1000
-  fsGroup: 1000
+  runAsUser: 65532 # distroless "nonroot"
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
