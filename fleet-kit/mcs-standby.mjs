@@ -29,7 +29,8 @@ const TOKEN = process.env.MCS_TOKEN ?? "";
 const AGENT = process.env.MCS_AGENT_NAME ?? "";
 const FOLLOW = (process.env.MCS_FOLLOW ?? "team").split(",").map((s) => s.trim()).filter(Boolean);
 const CURSOR = process.env.MCS_STANDBY_CURSOR ?? "standby";
-const MAX_MS = Math.max(30_000, Number(process.env.MCS_STANDBY_MAX_MS ?? 600_000) || 600_000);
+// Floor is a hot-loop guard only — kept low so tests can drive short windows.
+const MAX_MS = Math.max(1_000, Number(process.env.MCS_STANDBY_MAX_MS ?? 600_000) || 600_000);
 const MAX_EVENTS = Math.max(1, Number(process.env.MCS_HOOK_MAX_EVENTS ?? 8) || 8);
 const TYPES_RAW = (process.env.MCS_STANDBY_TYPES ?? "task.created,task.expired,review.requested").trim();
 const TYPES = TYPES_RAW === "*" ? null : new Set(TYPES_RAW.split(",").map((s) => s.trim()).filter(Boolean));

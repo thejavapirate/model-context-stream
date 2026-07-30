@@ -16,9 +16,13 @@ export interface AuthedRequest extends Request {
  */
 export function resolveHttpAgentName(req: AuthedRequest): string {
   const header = req.header("x-agent-name");
-  if (header) return header.slice(0, 128);
+  // Clients that template this header (e.g. .mcp.json "${MCS_AGENT_NAME}") send the
+  // raw placeholder when the variable is unset — never let that become an identity.
+  if (header && !UNEXPANDED_TEMPLATE.test(header)) return header.slice(0, 128);
   return req.tokenAgent ?? "anon";
 }
+
+const UNEXPANDED_TEMPLATE = /\$\{[^}]*\}?|^\$[A-Za-z_]/;
 
 function tokenMatches(presented: string, known: string): boolean {
   const a = Buffer.from(presented);

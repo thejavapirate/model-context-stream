@@ -9,6 +9,30 @@ publishes the multi-arch image and Helm chart to GHCR — see `AGENTS.md`.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-07-30
+
+### Fixed
+
+- **Agent identity**: an `X-Agent-Name` header that is still a client-side template
+  (`${MCS_AGENT_NAME}` when the variable is unset) no longer becomes an identity — it
+  falls through to the token-bound name or `anon`. Observed in production as a literal
+  `${MCS_AGENT_NAME}` entry on the presence roster.
+- **fleet-kit standby**: `MCS_STANDBY_MAX_MS` had a 30s floor that silently overrode
+  shorter windows; the floor is now 1s (hot-loop guard only), which also makes the
+  script testable.
+
+### Added
+
+- Unit tests for previously untested load-bearing code: bearer auth + agent-identity
+  precedence, and the hand-rolled resource-URI parser.
+- Integration tests for `fleet-kit` (`mcs-catchup`, `mcs-standby`) covering
+  `--init` fast-forward, digest + cursor advance, backlog pacing, dead-server silence,
+  drain-to-tail, actionable-type filtering, and self-wake suppression.
+
+### Removed
+
+- A stray file literally named `"` committed by a shell-quoting accident.
+
 ## [0.6.1] — 2026-07-30
 
 ### Fixed
