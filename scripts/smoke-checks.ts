@@ -74,7 +74,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
 
   try {
     // ── Check 1: publish → live resources/updated notification → replay ────
-    log(`[1/6] live notification on ${streamUri}`);
+    log(`[1/7] live notification on ${streamUri}`);
     await b.client.subscribeResource({ uri: streamUri });
     await b.client.subscribeResource({ uri: "tasks://queue" });
 
@@ -96,7 +96,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: B was notified and replayed A's event (cid + source intact)");
 
     // ── Check 2: claim race — exactly one winner ────────────────────────────
-    log("[2/6] task claim race");
+    log("[2/7] task claim race");
     const created = toolJson<{ id: string }>(
       await a.client.callTool({
         name: "create_task",
@@ -130,7 +130,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: exactly one winner; full lifecycle visible on stream://tasks");
 
     // ── Check 3: HTTP ingest → subscribed agent notified ────────────────────
-    log("[3/6] HTTP ingest");
+    log("[3/7] HTTP ingest");
     const beforeIngest = b.notifications.filter((u) => u === streamUri).length;
     const res = await fetch(`${target.baseUrl}/ingest/${streamName}`, {
       method: "POST",
@@ -152,7 +152,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: external event ingested, fanned out, source stamped");
 
     // ── Check 4: presence — agents://online roster ──────────────────────────
-    log("[4/6] presence roster");
+    log("[4/7] presence roster");
     const roster = await b.client.readResource({ uri: "agents://online" });
     const rosterJson = JSON.parse(
       (roster.contents as Array<{ text?: string }>)[0]!.text ?? "{}",
@@ -165,7 +165,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: both agents visible on agents://online");
 
     // ── Check 5: durable cursors ────────────────────────────────────────────
-    log("[5/6] durable cursors");
+    log("[5/7] durable cursors");
     const cursorStream = `${streamName}-cur`;
     for (let i = 0; i < 3; i++) {
       await a.client.callTool({
@@ -201,7 +201,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: cursor committed, resumed exactly at the right offset");
 
     // ── Check 6: stateless REST catch-up (works on any replica, no session) ─
-    log("[6/6] REST catch-up read");
+    log("[6/7] REST catch-up read");
     const restStream = `${streamName}-rest`;
     const restHeaders = headers(target, "smoke-rest");
     const pub = await fetch(`${target.baseUrl}/ingest/${restStream}`, {
@@ -224,6 +224,25 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
       throw new Error(`REST cursor did not advance: second read got ${secondJson.events.length} events`);
     }
     log("      ok: REST read + durable cursor advanced statelessly");
+
+    // ── Check 7: wake registration lifecycle (agent-scoped, no admin) ───────
+    log("[7/7] wake registration lifecycle");
+    const wake = toolJson<{ id: string; kind: string; owner: string }>(
+      await a.client.callTool({
+        name: "register_wake",
+        arguments: { stream: `${streamName}-wake`, url: "http://127.0.0.1:9/wake", debounceSec: 60 },
+      }),
+    );
+    if (wake.kind !== "wake") throw new Error(`register_wake kind: ${wake.kind}`);
+    const wakes = toolJson<{ wakes: Array<{ id: string }> }>(await a.client.callTool({ name: "list_wakes", arguments: {} }));
+    if (!wakes.wakes.some((w) => w.id === wake.id)) throw new Error("list_wakes missing new registration");
+    const gone = toolJson<{ removed?: string }>(
+      await a.client.callTool({ name: "remove_wake", arguments: { id: wake.id } }),
+    );
+    if (gone.removed !== wake.id) throw new Error("remove_wake failed");
+    const after = toolJson<{ wakes: Array<{ id: string }> }>(await a.client.callTool({ name: "list_wakes", arguments: {} }));
+    if (after.wakes.some((w) => w.id === wake.id)) throw new Error("wake survived removal");
+    log("      ok: register → list → remove, owner-scoped, no admin token needed");
 
     log("smoke: ALL CHECKS PASSED");
   } finally {

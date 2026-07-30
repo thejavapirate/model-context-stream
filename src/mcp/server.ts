@@ -8,7 +8,7 @@ import type { PresenceService } from "../core/presence.js";
 import type { ProtocolService } from "../core/protocols.js";
 import type { StreamService } from "../core/streams.js";
 import { TaskError, type TaskService, type TaskStatus } from "../core/tasks.js";
-import type { WebhookService } from "../core/webhooks.js";
+import { validateWakeUrl, type WebhookService } from "../core/webhooks.js";
 import { VERSION } from "../version.js";
 import type { FederationManager } from "./federation.js";
 import type { ListChangedNotifier } from "./notifier.js";
@@ -461,6 +461,72 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
       const denied = requireAdmin();
       if (denied) return denied;
       return json({ webhooks: await webhooks.list() });
+    },
+  );
+
+  // ── Wake tools (agent-scoped: any agent may wake ITSELF) ──────────────────
+  const WAKE_QUOTA = 5;
+  mcp.registerTool(
+    "register_wake",
+    {
+      title: "Register a wake for this agent",
+      description:
+        "Wake yourself when a stream gets events: the server POSTs a signed wake envelope " +
+        "(triggering event + cursorAnchor to catch up from) to your runner's URL, debounced " +
+        "to at most one wake per debounceSec. Registered under YOUR identity — max " +
+        `${WAKE_QUOTA} registrations, removable only by you or an admin. Every registration ` +
+        "is announced on stream://system for audit. See fleet-kit/wake-runner for a receiver.",
+      inputSchema: {
+        stream: streamNameSchema,
+        url: z.string().url().max(2048),
+        secret: z.string().max(256).optional(),
+        types: z.array(eventTypeSchema).max(32).optional(),
+        debounceSec: z.number().int().min(1).max(3600).default(60),
+      },
+    },
+    async ({ stream, url, secret, types, debounceSec }) => {
+      const urlProblem = validateWakeUrl(url);
+      if (urlProblem) return errorResult(urlProblem);
+      if ((await webhooks.countByOwner(ctx.agentName)) >= WAKE_QUOTA) {
+        return errorResult(`wake quota reached (${WAKE_QUOTA} per agent) — remove_wake one first`);
+      }
+      const hook = await webhooks.add({
+        stream,
+        url,
+        kind: "wake",
+        owner: ctx.agentName,
+        debounceSec,
+        ...(secret ? { secret } : {}),
+        ...(types ? { types } : {}),
+        createdBy: ctx.agentName,
+      });
+      const { secret: _redacted, ...safe } = hook;
+      return json({ ...safe, hasSecret: Boolean(secret) });
+    },
+  );
+
+  mcp.registerTool(
+    "list_wakes",
+    {
+      title: "List my wake registrations",
+      description: "List the wake registrations owned by this agent (secrets redacted).",
+      inputSchema: {},
+    },
+    async () => json({ agent: ctx.agentName, wakes: await webhooks.listByOwner(ctx.agentName) }),
+  );
+
+  mcp.registerTool(
+    "remove_wake",
+    {
+      title: "Remove one of my wake registrations",
+      description: "Delete a wake registration by id. Only the owner (or an admin) may remove it.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const result = await webhooks.removeOwned(id, ctx.agentName, ctx.isAdmin);
+      if (result === "removed") return json({ removed: id });
+      if (result === "forbidden") return errorResult(`wake ${id} belongs to another agent`);
+      return errorResult(`wake ${id} not found`);
     },
   );
 

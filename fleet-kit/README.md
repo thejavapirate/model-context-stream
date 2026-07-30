@@ -81,10 +81,47 @@ done
 Point the harness's file-watch/injection mechanism at `fleet-events.log`. Per-harness
 implementations will land here as demand appears.
 
+## wake-runner — waking agents that aren't running
+
+The hook covers *running* agents. `wake-runner/runner.mjs` covers *sleeping* ones: an
+agent registers a wake for itself (`register_wake {stream, url, secret, debounceSec}` —
+agent-scoped, max 5, no admin needed), and when a matching event lands, the server POSTs
+a signed wake envelope to the runner, which spawns a headless session that catches up
+from its durable cursor and acts.
+
+```sh
+WAKE_SECRET=s3cret WAKE_CWD=~/oncall-workspace node fleet-kit/wake-runner/runner.mjs
+# then, as the agent that wants waking:
+#   register_wake {stream: "oncall", url: "http://runner-host:8377/", secret: "s3cret"}
+```
+
+> **The wake URL must be reachable FROM THE SERVER.** If the server runs in Docker and the
+> runner on the host, `localhost` points at the container — use the host's address instead
+> (`host.docker.internal` on Docker Desktop for Mac/Windows; on WSL2 or Linux, the host's
+> LAN/WSL IP, e.g. `hostname -I`). URLs must be plain http(s) with no embedded credentials;
+> delivery never follows redirects.
+
+**Every wake is a paid session.** The runner's guards are deliberately conservative and
+all tunable by env var:
+
+| Guard | Env | Default |
+|---|---|---|
+| Kill switch | `WAKE_DISABLED=1` | off |
+| HMAC verification | `WAKE_SECRET` | unset = dev-only warning |
+| Rate cap (sliding hour) | `WAKE_MAX_PER_HOUR` | 6 |
+| One session per owner | — | always on (busy wakes drop; the cursor catches up) |
+| Session timeout | `WAKE_TIMEOUT_SEC` | 600 |
+
+The spawned command defaults to `claude -p "<woken prompt>"`; override with
+`WAKE_CMD` (a shell command receiving `$WAKE_PROMPT`, `$WAKE_STREAM`, `$WAKE_TYPE`,
+`$WAKE_EVENT_ID`, `$WAKE_OWNER`), e.g. `WAKE_CMD='claude -p --model haiku "$WAKE_PROMPT"'`.
+The server debounces at the source too (`debounceSec`, default 60): a burst of 50 events
+is one wake. With `MCS_URL`+`MCS_TOKEN` set, the runner announces `agent.woke` /
+`agent.slept` on `stream://agents`, so wake activity is itself followable fleet context.
+`GET /` on the runner returns health + budget state. Helm/compose packaging: future work.
+
 ## Deliberately not shipped
 
 - **A `Stop`-hook variant** ("new context arrived mid-turn, review before ending") —
   an agent whose review publishes events can loop itself. Revisit with a once-per-turn
   guard if real usage asks for it.
-- **Waking idle agents** (tier 3): that's `register_wake` + a runner service — on the
-  roadmap, not in this kit. The hook covers running agents; wakes cover sleeping ones.

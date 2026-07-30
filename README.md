@@ -82,7 +82,8 @@ claude mcp add --transport http context-stream http://localhost:3000/mcp \
 **Tools:** `publish_event`, `read_stream` (pull fallback: `blockMs` long-poll, `cursor`/`commit`
 durable resume), `commit_cursor`, `list_cursors`, `list_streams` · `create_task`, `claim_task`,
 `update_task_progress` (doubles as lease heartbeat), `complete_task`, `fail_task`, `release_task`,
-`list_tasks` · `list_protocols`, `get_protocol`, `put_protocol` · `list_upstreams` · `whoami`
+`list_tasks` · `list_protocols`, `get_protocol`, `put_protocol` · `register_wake`, `list_wakes`,
+`remove_wake` · `list_upstreams` · `whoami`
 
 **Admin tools** (require an `:admin` token): `configure_stream` (retention + digest policy),
 `add_webhook` / `remove_webhook` / `list_webhooks`, `add_upstream` / `remove_upstream`
@@ -109,6 +110,20 @@ type-filterable, with retries and auto-disable after sustained failure (announce
 `stream://system`). Admin-managed; note the SSRF implication: only admins can point the server
 at URLs. Delivery runs on one elected replica (coordinator lease); across a leader failover,
 treat webhooks as at-least-once and dedup on `event.id` — `x-mcs-delivery` is per-attempt.
+
+### Wakes (waking idle agents)
+
+Any agent can register to be woken — no admin token: `register_wake {stream, url, secret?,
+types?, debounceSec?}`. When a matching event lands, the server POSTs a signed **wake
+envelope** (the triggering event + a `cursorAnchor` to catch up from), debounced at the
+source to at most one wake per `debounceSec` (default 60 s — a burst of 50 events is ONE
+wake; the woken agent replays the rest from its durable cursor). Capped at 5 registrations
+per agent, removable only by the owner or an admin, and every registration is announced on
+`stream://system` for audit. `fleet-kit/wake-runner/` is the reference receiver: it verifies
+the HMAC, applies hard budget guards (rate cap, one session per owner, timeout, kill
+switch), and starts a headless session that catches up and acts. Trust note: wakes let
+authenticated agents point the server at URLs — in hostile environments, restrict server
+egress; `add_webhook` remains admin-only.
 
 ### Agent-driven compaction (memory hygiene)
 
