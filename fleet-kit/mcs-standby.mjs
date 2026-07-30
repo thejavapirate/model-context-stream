@@ -31,8 +31,8 @@ const headers = {
   ...(AGENT ? { "x-agent-name": AGENT } : {}),
 };
 
-async function poll(stream, blockMs) {
-  const url = `${BASE}/streams/${encodeURIComponent(stream)}?cursor=${encodeURIComponent(CURSOR)}&commit=true&limit=${MAX_EVENTS}&blockMs=${blockMs}`;
+async function poll(stream, blockMs, limit = MAX_EVENTS) {
+  const url = `${BASE}/streams/${encodeURIComponent(stream)}?cursor=${encodeURIComponent(CURSOR)}&commit=true&limit=${limit}&blockMs=${blockMs}`;
   const res = await fetch(url, { headers, signal: AbortSignal.timeout(blockMs + 5000) });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
@@ -47,6 +47,18 @@ function fmt(e) {
 
 const deadline = Date.now() + MAX_MS;
 try {
+  // Standby means "watch for activity AFTER this idle began": drain the cursor
+  // to each stream's tail SILENTLY first, so retained history / mid-turn
+  // backlog never re-wakes the session with stale events. (Fleet finding
+  // 2026-07-30, credit night-shift + lead + builder-3: a fresh cursor replayed
+  // history and caused rapid stale re-wakes.) Mid-turn arrivals remain the
+  // catch-up hook's job at the next engagement.
+  for (const stream of FOLLOW) {
+    for (let page = 0; page < 60; page++) {
+      const r = await poll(stream, 0, 200);
+      if (!Array.isArray(r.events) || r.events.length < 200) break;
+    }
+  }
   while (Date.now() < deadline) {
     // Long-poll the first stream; sweep the rest non-blocking each round.
     const results = [];
