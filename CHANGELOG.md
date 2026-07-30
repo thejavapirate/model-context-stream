@@ -9,6 +9,8 @@ publishes the multi-arch image and Helm chart to GHCR — see `AGENTS.md`.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-30
+
 ### Fixed
 
 - **fleet-kit standby**: only *actionable* event types re-wake an idle session
