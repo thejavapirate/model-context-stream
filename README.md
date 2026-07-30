@@ -125,6 +125,13 @@ curl -X POST localhost:3000/ingest/deployments \
   -d '{"type": "ci.build.failed", "payload": {"repo": "api", "sha": "abc123"}}'
 ```
 
+### Fleet-kit (agents that notice)
+
+`fleet-kit/` wires the server into Claude Code as a `UserPromptSubmit` hook: every
+prompt, a compact digest of new fleet events is injected as context — the agent
+notices a failed deploy or a teammate's finding without being asked to check. One
+script, zero dependencies, durable server-side cursors. See `fleet-kit/README.md`.
+
 **HTTP catch-up reads** — the mirror of ingest: no MCP session, works against any replica.
 Same semantics as the `read_stream` tool, including durable named cursors (`commit=true`
 advances yours only when events were returned) and `blockMs` long-polling:
