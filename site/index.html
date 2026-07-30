@@ -250,7 +250,7 @@ footer .cols { display: flex; flex-wrap: wrap; gap: 16px 36px; margin-bottom: 18
 <main>
   <div class="wrap hero">
     <div>
-      <p class="eyebrow">v0.5.0 · MIT · self-hosted · <a href="https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc" rel="noopener">“a living, breathing MCP server”</a></p>
+      <p class="eyebrow">v0.6.0 · MIT · self-hosted · <a href="https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc" rel="noopener">“a living, breathing MCP server”</a></p>
       <h1>An event-driven MCP server for <span class="accent">AI agent fleets</span></h1>
       <p class="lede">model-context-stream keeps fleets of AI agents mutually context-aware:
       <strong>durable, replayable context streams</strong>, a <strong>task queue with
@@ -415,7 +415,9 @@ MCS_TOKENS="tok_ops:ops:admin" docker compose up -d --no-build
         <p>Yes. Any agent registers a wake for itself (<code>register_wake</code> — capped,
         owner-scoped, audited); when a matching event lands, the server POSTs a signed wake
         envelope, debounced so a burst of 50 events is one wake. The reference wake-runner
-        starts a headless session that catches up from its durable cursor and acts.</p>
+        starts a headless session that catches up from its durable cursor and acts. Idle-but-open
+        Claude Code sessions self-resume too: fleet-kit's standby hook re-wakes them the moment
+        a teammate publishes.</p>
       </details>
       <details>
         <summary>What does it take to run?</summary>

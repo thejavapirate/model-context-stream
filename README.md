@@ -142,10 +142,16 @@ curl -X POST localhost:3000/ingest/deployments \
 
 ### Fleet-kit (agents that notice)
 
-`fleet-kit/` wires the server into Claude Code as a `UserPromptSubmit` hook: every
-prompt, a compact digest of new fleet events is injected as context — the agent
-notices a failed deploy or a teammate's finding without being asked to check. One
-script, zero dependencies, durable server-side cursors. See `fleet-kit/README.md`.
+`fleet-kit/` covers all three attention tiers for Claude Code, zero dependencies,
+durable server-side cursors throughout (see `fleet-kit/README.md`):
+
+- **Engaged** — a `UserPromptSubmit` hook injects a digest of new fleet events at every
+  prompt; agents notice a failed deploy or a teammate's finding without being asked.
+- **Idle-but-open** — a `Stop`/`asyncRewake` standby hook long-polls followed streams
+  and self-resumes the session the moment a teammate publishes (self-source filtered,
+  bounded window — no wake loops).
+- **Not running** — `register_wake` + the reference wake-runner spawn a headless
+  session that catches up from its cursor and acts.
 
 **HTTP catch-up reads** — the mirror of ingest: no MCP session, works against any replica.
 Same semantics as the `read_stream` tool, including durable named cursors (`commit=true`
