@@ -31,6 +31,12 @@ XADD/XREAD/Lua semantics wrong and are deliberately not used).
 `docker compose up -d --build && MCS_URL=http://localhost:3000 MCS_TOKEN=<token> npm run smoke`.
 The smoke script is the executable definition of "the product works".
 
+**Every user-visible change adds a `CHANGELOG.md` entry under `## [Unreleased]`** (Added /
+Changed / Fixed). **Cutting a release** = move that section under a new `## [X.Y.Z] — <date>`
+heading, bump `package.json` + `deploy/helm/.../Chart.yaml` (version *and* appVersion) + the
+site's version eyebrow, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag
+publishes the multi-arch image and chart to GHCR.
+
 ## Architecture map
 
 | Path | Responsibility |
