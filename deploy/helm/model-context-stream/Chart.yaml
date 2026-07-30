@@ -5,8 +5,8 @@ description: >-
   queue with atomic claims, versioned protocols, MCP tool federation,
   webhooks, and agent presence — for context-aware agent fleets.
 type: application
-version: 0.6.2
-appVersion: "0.6.2"
+version: 0.6.3
+appVersion: "0.6.3"
 keywords:
   - mcp
   - model-context-protocol

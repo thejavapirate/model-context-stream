@@ -14,6 +14,25 @@ export function createRedis(url: string): RedisConnections {
   // Blocking reads park the connection for seconds at a time; never share it.
   const blocking = new Redis(url, { ...opts, maxRetriesPerRequest: null });
 
+  // ioredis reconnects on its own; without a listener every retry prints an
+  // "Unhandled error event" stack. Log the first failure per connection, then
+  // stay quiet until it recovers — /healthz is the real liveness signal.
+  for (const [name, conn] of [
+    ["main", main],
+    ["blocking", blocking],
+  ] as const) {
+    let down = false;
+    conn.on("error", (err: Error) => {
+      if (down) return;
+      down = true;
+      console.warn(`[redis:${name}] ${err.message} — retrying in background`);
+    });
+    conn.on("ready", () => {
+      if (down) console.log(`[redis:${name}] reconnected`);
+      down = false;
+    });
+  }
+
   return {
     main,
     blocking,

@@ -21,8 +21,12 @@ async function main(): Promise<void> {
     console.warn("[boot] MCS_TOKENS is empty — running WITHOUT auth (local dev only; every session is admin)");
   }
 
+  // Redis being briefly unreachable must not crash-loop the process: serve HTTP
+  // immediately, connect in the background, and let /healthz (which does a real
+  // round-trip) gate traffic via readiness probes. Introspecting the MCP surface —
+  // initialize, tools/list — needs no Redis at all.
   const redis = createRedis(config.redisUrl);
-  await redis.main.ping();
+  const redisReady = waitForRedis(redis.main);
 
   const streams = new StreamService(redis.main, config.streamMaxLen, config.redisUrl);
   const tasks = new TaskService(redis.main, streams);
@@ -42,7 +46,6 @@ async function main(): Promise<void> {
   const webhooks = new WebhookService(redis.main, fanout, streams);
 
   const federation = new FederationManager(redis.main, config, toolsChanged);
-  await federation.start();
 
   const digests = new DigestScheduler(redis.main, streams, tasks, protocols, fanout);
 
@@ -59,11 +62,15 @@ async function main(): Promise<void> {
       await webhooks.deactivate();
     },
   });
-  coordinator.start();
-
-  // All replicas reap: the Lua pops expired leases atomically, so concurrent
-  // reapers get disjoint result sets and task.expired fires exactly once.
-  tasks.startReaper();
+  // Everything below needs a live Redis, so arm it once the connection is up
+  // (immediately in the normal case; after N retries if Redis lags the server).
+  void redisReady.then(() => {
+    void federation.start().catch((err) => console.error("[boot] federation:", err?.message ?? err));
+    coordinator.start();
+    // All replicas reap: the Lua pops expired leases atomically, so concurrent
+    // reapers get disjoint result sets and task.expired fires exactly once.
+    tasks.startReaper();
+  });
   initRuntimeGauges({ sessions: registry, tasks, presence, coordinator });
 
   const app = buildApp(
@@ -97,6 +104,25 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+/** Resolve once Redis answers a PING, retrying forever with capped backoff. */
+async function waitForRedis(redis: { ping(): Promise<string> }): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await redis.ping();
+      if (attempt > 0) console.log("[boot] redis reachable — arming Redis-backed services");
+      return;
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn(
+          `[boot] redis unreachable (${err instanceof Error ? err.message : err}) — serving HTTP anyway; ` +
+            "/healthz stays unhealthy and Redis-backed work is armed once it connects",
+        );
+      }
+      await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 15_000)));
+    }
+  }
 }
 
 main().catch((err) => {

@@ -9,6 +9,20 @@ publishes the multi-arch image and Helm chart to GHCR — see `AGENTS.md`.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-07-30
+
+### Changed
+
+- **Redis is no longer required to boot.** The server starts serving immediately and
+  connects to Redis in the background with capped backoff; `/healthz` reports unhealthy
+  (503) until the round-trip succeeds, so Kubernetes readiness gates traffic instead of
+  the process crash-looping on a dependency that is briefly unavailable. Redis-backed
+  work (coordinator lease, task reaper, federation) arms as soon as the connection is
+  up. The MCP surface — `initialize`, `tools/list` — needs no Redis, so registries and
+  scanners can introspect the image standalone.
+- Redis connection errors are logged once per outage with a recovery line, instead of
+  an "Unhandled error event" stack per retry.
+
 ## [0.6.2] — 2026-07-30
 
 ### Fixed
