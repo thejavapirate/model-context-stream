@@ -125,3 +125,17 @@ is one wake. With `MCS_URL`+`MCS_TOKEN` set, the runner announces `agent.woke` /
 - **A `Stop`-hook variant** ("new context arrived mid-turn, review before ending") —
   an agent whose review publishes events can loop itself. Revisit with a once-per-turn
   guard if real usage asks for it.
+
+## mcs-standby — self-resuming idle sessions (tier 2.5)
+
+The catch-up hook needs a prompt; `mcs-standby.mjs` removes even that for open-but-idle
+terminals. Wired as a `Stop` hook with `asyncRewake`, it long-polls followed streams after
+the agent goes idle and re-wakes the session with a digest when a teammate's event arrives
+(exit 2 → rewake). Loop-safe: events from the agent's OWN identity never re-wake it, and
+one bounded standby window runs per stop (`MCS_STANDBY_MAX_MS`, default 10 min) — after
+that the session truly sleeps and tier 3 (wakes) takes over.
+
+```json
+"Stop": [{ "hooks": [{ "type": "command", "asyncRewake": true, "timeout": 630,
+  "command": "MCS_URL=... MCS_TOKEN=... MCS_AGENT_NAME=me MCS_FOLLOW=team node fleet-kit/mcs-standby.mjs" }] }]
+```
