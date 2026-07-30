@@ -133,3 +133,11 @@ that the session truly sleeps and tier 3 (wakes) takes over.
 "Stop": [{ "hooks": [{ "type": "command", "asyncRewake": true, "timeout": 630,
   "command": "MCS_URL=... MCS_TOKEN=... MCS_AGENT_NAME=me MCS_FOLLOW=team node fleet-kit/mcs-standby.mjs" }] }]
 ```
+
+**Cost control matters here**: waking N idle agents for one informational event costs N
+paid sessions. Only *actionable* types re-wake by default —
+`MCS_STANDBY_TYPES=task.created,task.expired,review.requested`. Fleet chatter
+(`agent.status`, `build.milestone`, `finding.*`) is picked up at the next engagement by
+the catch-up hook instead of spending a session on "noted." Set `MCS_STANDBY_TYPES=*` to
+re-wake on everything. Standby also drains its cursor to the tail before watching, so
+retained history never re-wakes a session.
