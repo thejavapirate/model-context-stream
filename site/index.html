@@ -87,10 +87,12 @@ a { color: var(--cyan); text-decoration: none; }
 a:hover { text-decoration: underline; }
 a:focus-visible, button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
 code, pre, .mono { font-family: var(--mono); }
-.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+/* Horizontal gutters live ONLY here (padding-inline); layout rules below must
+   use padding-block so they never zero these out via the padding shorthand. */
+.wrap { max-width: 1280px; margin: 0 auto; padding-inline: clamp(20px, 4vw, 44px); }
 
 /* ── header ─────────────────────────────────────────── */
-.top { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+.top { display: flex; align-items: center; justify-content: space-between; padding-block: 22px; }
 .brand { font-family: var(--mono); font-size: 15px; color: var(--ink); }
 .brand .p { color: var(--cyan); }
 .top nav { display: flex; gap: 22px; font-size: 14px; }
@@ -98,12 +100,19 @@ code, pre, .mono { font-family: var(--mono); }
 .top nav a:hover { color: var(--ink); text-decoration: none; }
 
 /* ── hero ───────────────────────────────────────────── */
-.hero { display: grid; grid-template-columns: 11fr 9fr; gap: 48px; align-items: center; padding: 56px 0 72px; }
+/* minmax(0, …) is load-bearing: bare fr tracks have min-content floors, and the
+   quickstart pre's long curl line would otherwise inflate the left track and
+   crush the stream panel. */
+.hero {
+  display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+  gap: clamp(32px, 5vw, 72px); align-items: center; padding-block: 60px 80px;
+}
+.hero > div { min-width: 0; }
 .eyebrow { font-family: var(--mono); font-size: 13px; color: var(--amber); letter-spacing: .04em; }
 .eyebrow a { color: inherit; }
 h1 {
   font-family: var(--display); font-weight: 800;
-  font-size: clamp(34px, 5vw, 54px); line-height: 1.05;
+  font-size: clamp(34px, 4.6vw, 58px); line-height: 1.05;
   letter-spacing: -0.02em; margin: 14px 0 18px;
 }
 h1 .accent { color: var(--cyan); }
@@ -132,12 +141,12 @@ h1 .accent { color: var(--cyan); }
   overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.35);
 }
 .stream-bar {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 14px; border-bottom: 1px solid var(--line);
   font-family: var(--mono); font-size: 12.5px; color: var(--muted);
 }
-.stream-bar .uri { color: var(--cyan); }
-.presence { display: flex; align-items: center; gap: 7px; }
+.stream-bar .uri { color: var(--cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.presence { display: flex; align-items: center; gap: 7px; white-space: nowrap; flex-shrink: 0; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
 .dot.pulse { animation: pulse 2.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
@@ -146,10 +155,11 @@ h1 .accent { color: var(--cyan); }
   display: flex; flex-direction: column; justify-content: flex-end;
 }
 .stream-log li {
-  display: grid; grid-template-columns: 118px 1fr; gap: 12px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px;
   padding: 7px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
 }
-.stream-log .id { color: #55647A; }
+.stream-log .id { color: #55647A; white-space: nowrap; }
+.stream-log .type, .stream-log .body { overflow-wrap: anywhere; }
 .stream-log .type { font-weight: 500; }
 .stream-log .body { color: var(--muted); }
 .t-stream .type { color: var(--cyan); }
@@ -166,7 +176,7 @@ h1 .accent { color: var(--cyan); }
 }
 
 /* ── sections ───────────────────────────────────────── */
-section { padding: 64px 0; border-top: 1px solid var(--line); }
+section { padding-block: 64px; border-top: 1px solid var(--line); }
 h2 {
   font-family: var(--display); font-weight: 700;
   font-size: clamp(24px, 3.2vw, 32px); letter-spacing: -0.01em; margin-bottom: 10px;
@@ -174,7 +184,8 @@ h2 {
 .sub { color: var(--muted); max-width: 62ch; margin-bottom: 36px; }
 .sub a { color: var(--cyan); }
 
-.cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (min-width: 1100px) { .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   padding: 22px; transition: border-color .15s ease;
@@ -217,7 +228,7 @@ footer { border-top: 1px solid var(--line); padding: 36px 0 56px; color: var(--m
 footer .cols { display: flex; flex-wrap: wrap; gap: 16px 36px; margin-bottom: 18px; }
 
 @media (max-width: 880px) {
-  .hero { grid-template-columns: 1fr; padding: 32px 0 48px; }
+  .hero { grid-template-columns: 1fr; padding-block: 32px 48px; }
   .cards { grid-template-columns: 1fr; }
   .faq { grid-template-columns: 1fr; }
   .top nav { display: none; }
@@ -252,7 +263,8 @@ footer .cols { display: flex; flex-wrap: wrap; gap: 16px 36px; margin-bottom: 18
       </div>
       <div class="quick" id="quickstart">
         <pre><code><span class="c"># no clone needed — prebuilt images on GHCR</span>
-curl -sO https://raw.githubusercontent.com/thejavapirate/model-context-stream/main/docker-compose.yml
+curl -sO \
+  https://raw.githubusercontent.com/thejavapirate/model-context-stream/main/docker-compose.yml
 MCS_TOKENS="tok_ops:ops:admin" docker compose up -d --no-build
 <span class="c"># connect any MCP client to</span> <span class="g">http://localhost:3000/mcp</span></code></pre>
       </div>
