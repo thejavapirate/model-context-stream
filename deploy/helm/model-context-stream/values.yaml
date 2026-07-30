@@ -7,8 +7,11 @@ image:
 
 imagePullSecrets: []
 
-# MCP sessions live in server memory. Keep replicaCount at 1 unless you also
-# enable session affinity below AND your load balancer honors it end-to-end
+# Coordination state (presence, webhooks, digest scheduling, tasks, cursors)
+# is Redis-backed and replica-safe as of 0.4.0: webhook delivery and digest
+# scheduling run on one elected coordinator, and /ingest + GET /streams/:stream
+# are stateless on any replica. MCP transport sessions still live in pod
+# memory, so replicaCount > 1 additionally requires session affinity for /mcp
 # (client IP affinity breaks behind some proxies/LBs; cookie-based ingress
 # affinity is more reliable — see ingress.annotations example).
 replicaCount: 1

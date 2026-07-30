@@ -1,6 +1,7 @@
 import { Redis } from "ioredis";
 import { metrics } from "../metrics.js";
 import { keys, SYSTEM_STREAMS } from "../redis/keys.js";
+import { casDelete } from "./coordinator.js";
 import type { Fanout } from "./fanout.js";
 import type { ProtocolService } from "./protocols.js";
 import type { StreamService } from "./streams.js";
@@ -19,6 +20,8 @@ const DEFAULT_SETTINGS: DigestSettings = {
 
 const DIGEST_PROTOCOL = "stream-digest";
 const RESERVED = new Set<string>(Object.values(SYSTEM_STREAMS));
+/** Marker value between claiming a stream and knowing the task id. */
+const PENDING_MARKER = "pending";
 
 /**
  * Agent-driven stream compaction. When a stream with a digestThreshold grows
@@ -66,31 +69,51 @@ export class DigestScheduler {
     for (const meta of await this.streams.listStreams()) {
       if (!meta.digestThreshold || meta.digestThreshold < 4 || RESERVED.has(meta.name)) continue;
       if (meta.count <= meta.digestThreshold) continue;
-      if (await this.redis.get(keys.digestOpen(meta.name))) continue;
+      if (await this.redis.get(keys.digestOpen(meta.name))) continue; // fast path; the NX below is the real gate
 
-      // Keep the newest half-threshold; digest everything older.
-      const keep = Math.floor(meta.digestThreshold / 2);
-      const digestCount = meta.count - keep;
-      const range = (await this.redis.xrange(keys.stream(meta.name), "-", "+", "COUNT", digestCount)) as [
-        string,
-        string[],
-      ][];
-      const last = range[range.length - 1];
-      if (!last) continue;
-      const toId = last[0];
+      // Claim the marker BEFORE creating the task: SET NX is the single writer
+      // gate, so concurrent sweepers (this process's timer vs a fanout callback,
+      // or another replica) can never double-create a digest task.
+      const claimed = await this.redis.set(
+        keys.digestOpen(meta.name),
+        PENDING_MARKER,
+        "EX",
+        this.settings.markerTtlSec,
+        "NX",
+      );
+      if (claimed !== "OK") continue;
 
-      const task = await this.tasks.create({
-        title: `Digest stream "${meta.name}" (${digestCount} events up to ${toId})`,
-        description:
-          `Compact the oldest ${digestCount} events of stream "${meta.name}" into one digest event. ` +
-          `Follow the "${DIGEST_PROTOCOL}" protocol. Range: from the beginning through ${toId} (inclusive).`,
-        protocol: DIGEST_PROTOCOL,
-        priority: 3,
-        payload: { kind: "stream.digest", stream: meta.name, toId, eventCount: digestCount },
-        createdBy: "system",
-      });
-      await this.redis.set(keys.digestOpen(meta.name), task.id, "EX", this.settings.markerTtlSec);
-      this.open.set(meta.name, task.id);
+      try {
+        // Keep the newest half-threshold; digest everything older.
+        const keep = Math.floor(meta.digestThreshold / 2);
+        const digestCount = meta.count - keep;
+        const range = (await this.redis.xrange(keys.stream(meta.name), "-", "+", "COUNT", digestCount)) as [
+          string,
+          string[],
+        ][];
+        const last = range[range.length - 1];
+        if (!last) {
+          await this.redis.del(keys.digestOpen(meta.name));
+          continue;
+        }
+        const toId = last[0];
+
+        const task = await this.tasks.create({
+          title: `Digest stream "${meta.name}" (${digestCount} events up to ${toId})`,
+          description:
+            `Compact the oldest ${digestCount} events of stream "${meta.name}" into one digest event. ` +
+            `Follow the "${DIGEST_PROTOCOL}" protocol. Range: from the beginning through ${toId} (inclusive).`,
+          protocol: DIGEST_PROTOCOL,
+          priority: 3,
+          payload: { kind: "stream.digest", stream: meta.name, toId, eventCount: digestCount },
+          createdBy: "system",
+        });
+        await this.redis.set(keys.digestOpen(meta.name), task.id, "EX", this.settings.markerTtlSec, "XX");
+        this.open.set(meta.name, task.id);
+      } catch (err) {
+        await this.redis.del(keys.digestOpen(meta.name)).catch(() => {});
+        throw err;
+      }
     }
   }
 
@@ -98,7 +121,8 @@ export class DigestScheduler {
   private async recover(): Promise<void> {
     for (const meta of await this.streams.listStreams()) {
       const taskId = await this.redis.get(keys.digestOpen(meta.name));
-      if (!taskId) continue;
+      // "pending" = another sweeper is mid-claim; its owner finalizes or the TTL clears it.
+      if (!taskId || taskId === PENDING_MARKER) continue;
       this.open.set(meta.name, taskId);
       await this.onTaskSettled(taskId);
     }
@@ -111,13 +135,13 @@ export class DigestScheduler {
 
     const task = await this.tasks.get(taskId);
     if (!task) {
-      await this.clearMarker(stream);
+      await this.clearMarker(stream, taskId);
       return;
     }
     if (task.status === "failed" || (task.status === "pending" && task.attempts > 0)) {
       // Failed or lease-expired back to pending: drop the marker so the next
       // sweep re-evaluates (the same task may still be picked up meanwhile).
-      await this.clearMarker(stream);
+      await this.clearMarker(stream, taskId);
       return;
     }
     if (task.status !== "completed") return; // still in flight
@@ -126,7 +150,7 @@ export class DigestScheduler {
     const digestEventId = typeof task.result?.digestEventId === "string" ? task.result.digestEventId : undefined;
     if (!toId || !digestEventId) {
       console.error(`[digests] task ${taskId} completed without digestEventId/toId — not trimming`);
-      await this.clearMarker(stream);
+      await this.clearMarker(stream, taskId);
       return;
     }
 
@@ -134,13 +158,13 @@ export class DigestScheduler {
     const found = (await this.redis.xrange(keys.stream(stream), digestEventId, digestEventId)) as [string, string[]][];
     if (found.length === 0) {
       console.error(`[digests] digest event ${digestEventId} not found in ${stream} — not trimming`);
-      await this.clearMarker(stream);
+      await this.clearMarker(stream, taskId);
       return;
     }
 
     const removed = await this.streams.trimThrough(stream, toId);
     metrics.compactions.inc();
-    await this.clearMarker(stream);
+    await this.clearMarker(stream, taskId);
     await this.streams.publish({
       stream: SYSTEM_STREAMS.system,
       type: "stream.compacted",
@@ -149,9 +173,10 @@ export class DigestScheduler {
     });
   }
 
-  private async clearMarker(stream: string): Promise<void> {
+  /** CAS: only clears the marker if it still points at `taskId` — settling an old task never deletes a newer claim. */
+  private async clearMarker(stream: string, taskId: string): Promise<void> {
     this.open.delete(stream);
-    await this.redis.del(keys.digestOpen(stream));
+    await casDelete(this.redis, keys.digestOpen(stream), taskId);
   }
 
   private async seedProtocol(): Promise<void> {

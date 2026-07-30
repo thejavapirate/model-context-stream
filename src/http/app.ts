@@ -4,14 +4,19 @@ import express, { type Express, type Response } from "express";
 import { nanoid } from "nanoid";
 import { registry } from "../metrics.js";
 import { buildMcpServer, type Deps, type SessionCtx } from "../mcp/server.js";
-import { bearerAuth, type AuthedRequest } from "./auth.js";
+import { bearerAuth, resolveHttpAgentName, type AuthedRequest } from "./auth.js";
 import { ingestHandler } from "./ingest.js";
+import { readStreamHandler } from "./read.js";
 
 interface LiveTransport {
   transport: StreamableHTTPServerTransport;
 }
 
-export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express {
+export function buildApp(
+  deps: Deps,
+  pingRedis: () => Promise<boolean>,
+  coordinator?: { readonly isLeader: boolean },
+): Express {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -19,7 +24,11 @@ export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express
 
   app.get("/healthz", async (_req, res) => {
     const ok = await pingRedis().catch(() => false);
-    res.status(ok ? 200 : 503).json({ ok, sessions: deps.registry.all().length });
+    res.status(ok ? 200 : 503).json({
+      ok,
+      sessions: deps.registry.all().length, // this replica only; fleet-wide count is mcs_presence_sessions
+      ...(coordinator ? { leader: coordinator.isLeader } : {}),
+    });
   });
 
   app.get("/metrics", async (_req, res) => {
@@ -29,6 +38,7 @@ export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express
 
   const auth = bearerAuth(deps.config);
   app.post("/ingest/:stream", auth, ingestHandler(deps.streams, deps.listChanged));
+  app.get("/streams/:stream", auth, readStreamHandler(deps.streams, deps.cursors));
 
   const cleanup = (sessionId: string) => {
     transports.delete(sessionId);
@@ -39,9 +49,8 @@ export function buildApp(deps: Deps, pingRedis: () => Promise<boolean>): Express
 
   /** Identity precedence: X-Agent-Name header > token-bound name > MCP clientInfo > anon. */
   const resolveAgentName = (req: AuthedRequest, body: unknown): string => {
-    const header = req.header("x-agent-name");
-    if (header) return header.slice(0, 128);
-    if (req.tokenAgent) return req.tokenAgent;
+    const viaHttp = resolveHttpAgentName(req);
+    if (viaHttp !== "anon") return viaHttp;
     const clientInfo = (body as { params?: { clientInfo?: { name?: string; version?: string } } })?.params
       ?.clientInfo;
     if (clientInfo?.name) return `${clientInfo.name}${clientInfo.version ? `@${clientInfo.version}` : ""}`;

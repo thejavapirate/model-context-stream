@@ -145,4 +145,46 @@ describe("DigestScheduler", () => {
     await scheduler.sweep();
     expect(await main.get(keys.digestOpen(SYSTEM_STREAMS.tasks))).toBeNull();
   });
+
+  it("claim-first marker: concurrent sweeps across replicas create exactly one task per stream", async () => {
+    // A second scheduler on the same Redis = a second replica. Not started:
+    // sweep() is driven directly so the race is deterministic-concurrent.
+    const other = new DigestScheduler(main, streams, tasks, protocols, fanout, {
+      sweepIntervalMs: 3_600_000,
+      markerTtlSec: 3600,
+    });
+    const raceStreams = ["dig-race-0", "dig-race-1", "dig-race-2"];
+    for (const s of raceStreams) {
+      for (let i = 0; i < 20; i++) {
+        await streams.publish({ stream: s, type: "x", source: "t", payload: { i } });
+      }
+      await streams.updateMeta(s, { digestThreshold: 10 }, "admin");
+    }
+
+    await Promise.all([scheduler.sweep(), other.sweep(), scheduler.sweep(), other.sweep()]);
+
+    const all = await tasks.list({ limit: 200 });
+    for (const s of raceStreams) {
+      const digestTasks = all.filter((t) => t.payload?.kind === "stream.digest" && t.payload?.stream === s);
+      expect(digestTasks).toHaveLength(1);
+      // Marker finalized past "pending" to the winning task id.
+      expect(await main.get(keys.digestOpen(s))).toBe(digestTasks[0]!.id);
+    }
+  });
+
+  it("recover() leaves a foreign 'pending' claim untouched", async () => {
+    const stream = "dig-pending";
+    await streams.publish({ stream, type: "x", source: "t", payload: {} });
+    await main.set(keys.digestOpen(stream), "pending", "EX", 100);
+
+    const fresh = new DigestScheduler(main, streams, tasks, protocols, fanout, {
+      sweepIntervalMs: 3_600_000,
+      markerTtlSec: 3600,
+    });
+    await fresh.start();
+    fresh.stop();
+
+    // Pre-fix, recover() fed "pending" to onTaskSettled which deleted the marker.
+    expect(await main.get(keys.digestOpen(stream))).toBe("pending");
+  });
 });

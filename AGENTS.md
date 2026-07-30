@@ -40,12 +40,14 @@ The smoke script is the executable definition of "the product works".
 | `src/core/streams.ts` | Publish/read/registry/trim. Approximate `XTRIM MAXLEN ~` on publish; exact `trimThrough` for digests. |
 | `src/core/tasks.ts` | Task state machine. Claims/mutations/reaping are **Lua scripts** — atomicity lives there, not in JS. |
 | `src/core/fanout.ts` | ONE blocking XREAD loop per process → in-memory listeners. `subscribe()` is async: it snapshots the cursor before resolving (this fixed a real missed-event race — keep it). The `__wake__` control stream interrupts parked reads. |
-| `src/core/{cursors,webhooks,digests,protocols}.ts` | Durable per-agent cursors; outbound HTTP with HMAC + auto-disable; agent-driven compaction; versioned playbooks. |
+| `src/core/{cursors,webhooks,digests,protocols}.ts` | Durable per-agent cursors; outbound HTTP with HMAC + auto-disable; agent-driven compaction; versioned playbooks. Webhook *delivery* and digest *scheduling* are leader-only (armed via `activate()`/`start()` from the CoordinatorLease); add/remove/list work on any replica. |
+| `src/core/presence.ts` | Fleet-global session roster in Redis (TTL keys + self-pruning ZSET index, heartbeat). The `agents://online` source of truth; `stream://agents` events are best-effort hints. |
+| `src/core/coordinator.ts` | The CoordinatorLease (single-key Redis lease, CAS refresh/release) electing ONE replica for webhooks + digests, plus the shared `casDelete` helper. |
 | `src/mcp/server.ts` | The entire MCP surface — every tool/resource/prompt, one `McpServer` **per session**. The API contract lives here. |
 | `src/mcp/federation.ts` | Upstream MCP clients + namespaced `{upstream}__{tool}` proxies on every session. |
 | `src/mcp/sessions.ts` | Session registry, URI→fanout subscription mapping, presence events. |
 | `src/mcp/notifier.ts` | Debounce/coalesce for `resources/updated` (200ms/1s) and `list_changed` (500ms). |
-| `src/http/app.ts` | Streamable HTTP session lifecycle, auth, `/ingest/:stream`, `/healthz`, `/metrics`. |
+| `src/http/app.ts` | Streamable HTTP session lifecycle, auth, `/ingest/:stream`, `GET /streams/:stream` (stateless catch-up reads, `src/http/read.ts`), `/healthz`, `/metrics`. |
 | `test/e2e/fake-upstream.ts` | Minimal upstream MCP server for federation tests — reuse it. |
 
 ## Hard rules
@@ -63,8 +65,13 @@ The smoke script is the executable definition of "the product works".
   checks the digest event exists before `trimThrough`.
 - Admin-gated tools follow the `requireAdmin()` pattern in `src/mcp/server.ts`; token roles are
   parsed in `src/config.ts` (`token[:agentName[:admin]]`).
-- MCP sessions are **in-process state** — anything you build must assume single replica or
-  sticky sessions (documented in the Helm chart).
+- **Replica safety is the default.** MCP *transport* sessions are the one in-process exception
+  (sticky sessions for `/mcp` at >1 replica, documented in the Helm chart — goes away with the
+  MCP 2026-07-28 stateless migration). Everything else must be replica-safe: fleet-visible state
+  lives in Redis (presence, cursors, tasks, webhook registry), and background work that must run
+  once fleet-wide (webhook delivery, digest scheduling) arms only via the CoordinatorLease. Never
+  add process-local fleet state or unconditionally-armed background loops. Timings (presence TTL,
+  lease TTL) are code constants with settings objects for tests — not env vars.
 
 ## Testing yourself against the live server
 
@@ -87,6 +94,7 @@ lease expires (~5 min) and the task returns to the queue.
   `node_modules/.../shared/uriTemplate.js` before changing URI schemes.
 - `XTRIM MAXLEN ~` trims in ~100-entry macro-nodes — don't write tests expecting exact lengths.
 - The e2e boot in `test/e2e/*.test.ts` must wire ALL `Deps` (config, streams, tasks, protocols,
-  cursors, webhooks, federation, registry, listChanged, toolsChanged) — TypeScript will tell you.
+  cursors, webhooks, federation, registry, presence, listChanged, toolsChanged) — TypeScript
+  will tell you.
 - Blocking Redis reads need their own connection (`redis/client.ts` gives you `main` vs
   `blocking`; `read_stream blockMs` uses throwaway connections).

@@ -9,6 +9,17 @@ export interface AuthedRequest extends Request {
   tokenRole?: TokenRole;
 }
 
+/**
+ * Identity for plain HTTP surfaces (ingest, stream reads):
+ * X-Agent-Name header > token-bound name > "anon". The MCP path adds a
+ * clientInfo fallback on top of this — keep the precedence single-sourced here.
+ */
+export function resolveHttpAgentName(req: AuthedRequest): string {
+  const header = req.header("x-agent-name");
+  if (header) return header.slice(0, 128);
+  return req.tokenAgent ?? "anon";
+}
+
 function tokenMatches(presented: string, known: string): boolean {
   const a = Buffer.from(presented);
   const b = Buffer.from(known);

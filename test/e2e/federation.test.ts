@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config.js";
 import { CursorService } from "../../src/core/cursors.js";
 import { Fanout } from "../../src/core/fanout.js";
+import { PresenceService } from "../../src/core/presence.js";
 import { ProtocolService } from "../../src/core/protocols.js";
 import { StreamService } from "../../src/core/streams.js";
 import { TaskService } from "../../src/core/tasks.js";
@@ -82,16 +83,16 @@ beforeAll(async () => {
   const cursors = new CursorService(redis.main);
   fanout = new Fanout(redis.blocking, redis.main);
   fanout.start();
-  registry = new SessionRegistry(fanout, streams);
+  const presence = new PresenceService(redis.main);
+  registry = new SessionRegistry(fanout, streams, presence);
   listChanged = new ListChangedNotifier();
   toolsChanged = new ListChangedNotifier();
   webhooks = new WebhookService(redis.main, fanout, streams);
-  await webhooks.start();
   federation = new FederationManager(redis.main, config, toolsChanged);
   await federation.start();
 
   const app = buildApp(
-    { config, streams, tasks, protocols, cursors, webhooks, federation, registry, listChanged, toolsChanged },
+    { config, streams, tasks, protocols, cursors, webhooks, federation, registry, presence, listChanged, toolsChanged },
     async () => true,
   );
   server = app.listen(0);

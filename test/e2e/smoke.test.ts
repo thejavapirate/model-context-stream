@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, it } from "vitest";
 import { loadConfig } from "../../src/config.js";
 import { CursorService } from "../../src/core/cursors.js";
 import { Fanout } from "../../src/core/fanout.js";
+import { PresenceService } from "../../src/core/presence.js";
 import { WebhookService } from "../../src/core/webhooks.js";
 import { FederationManager } from "../../src/mcp/federation.js";
 import { ProtocolService } from "../../src/core/protocols.js";
@@ -41,17 +42,17 @@ beforeAll(async () => {
 
   fanout = new Fanout(redis.blocking, redis.main);
   fanout.start();
-  registry = new SessionRegistry(fanout, streams);
+  const presence = new PresenceService(redis.main);
+  registry = new SessionRegistry(fanout, streams, presence);
   listChanged = new ListChangedNotifier();
   const toolsChanged = new ListChangedNotifier();
   const webhooks = new WebhookService(redis.main, fanout, streams);
-  await webhooks.start();
   const federation = new FederationManager(redis.main, config, toolsChanged);
   await federation.start();
   tasks.startReaper();
 
   const app = buildApp(
-    { config, streams, tasks, protocols, cursors, webhooks, federation, registry, listChanged, toolsChanged },
+    { config, streams, tasks, protocols, cursors, webhooks, federation, registry, presence, listChanged, toolsChanged },
     async () => {
       return (await redis.main.ping()) === "PONG";
     },

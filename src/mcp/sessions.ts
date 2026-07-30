@@ -1,4 +1,5 @@
 import { Fanout } from "../core/fanout.js";
+import type { PresenceRecord, PresenceService } from "../core/presence.js";
 import type { StreamService } from "../core/streams.js";
 import { SYSTEM_STREAMS } from "../redis/keys.js";
 import { SessionNotifier } from "./notifier.js";
@@ -25,7 +26,31 @@ export class SessionRegistry {
   constructor(
     private readonly fanout: Fanout,
     private readonly streams?: StreamService,
+    private readonly presence?: PresenceService,
   ) {}
+
+  /** One session as a fleet-visible presence record. */
+  private toRecord(session: Session): PresenceRecord {
+    return {
+      sessionId: session.id,
+      agent: session.agentName,
+      connectedAt: session.connectedAt,
+      lastSeenAt: new Date(session.lastSeenAt).toISOString(),
+      subscriptions: [...session.subscriptions.keys()],
+    };
+  }
+
+  /** This replica's sessions for the presence heartbeat. */
+  snapshotPresence(): PresenceRecord[] {
+    return [...this.sessions.values()].map((s) => this.toRecord(s));
+  }
+
+  /** Best-effort, like emitPresence: the Redis roster self-heals via heartbeat + TTL. */
+  private syncPresence(session: Session): void {
+    void this.presence
+      ?.upsert(this.toRecord(session))
+      .catch((err) => console.error("[sessions] presence sync failed:", err?.message ?? err));
+  }
 
   /** Presence events are best-effort: registry mutations never fail on Redis. */
   private emitPresence(type: "agent.connected" | "agent.disconnected", session: Session): void {
@@ -55,6 +80,7 @@ export class SessionRegistry {
       close: input.close,
     };
     this.sessions.set(input.id, session);
+    this.syncPresence(session);
     this.emitPresence("agent.connected", session);
     return session;
   }
@@ -117,6 +143,7 @@ export class SessionRegistry {
     }
     if (!unsubscribe) return false;
     session.subscriptions.set(uri, unsubscribe);
+    this.syncPresence(session);
     return true;
   }
 
@@ -126,6 +153,7 @@ export class SessionRegistry {
     if (unsub) {
       unsub();
       session!.subscriptions.delete(uri);
+      this.syncPresence(session!);
     }
   }
 
@@ -136,6 +164,9 @@ export class SessionRegistry {
     session.subscriptions.clear();
     session.notifier.close();
     this.sessions.delete(id);
+    void this.presence
+      ?.remove(id)
+      .catch((err) => console.error("[sessions] presence remove failed:", err?.message ?? err));
     this.emitPresence("agent.disconnected", session);
   }
 

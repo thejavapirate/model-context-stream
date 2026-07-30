@@ -4,10 +4,12 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import type { CursorService } from "../core/cursors.js";
 import { eventTypeSchema, streamNameSchema } from "../core/events.js";
+import type { PresenceService } from "../core/presence.js";
 import type { ProtocolService } from "../core/protocols.js";
 import type { StreamService } from "../core/streams.js";
 import { TaskError, type TaskService, type TaskStatus } from "../core/tasks.js";
 import type { WebhookService } from "../core/webhooks.js";
+import { VERSION } from "../version.js";
 import type { FederationManager } from "./federation.js";
 import type { ListChangedNotifier } from "./notifier.js";
 import type { SessionRegistry } from "./sessions.js";
@@ -22,6 +24,8 @@ export interface Deps {
   webhooks: WebhookService;
   federation: FederationManager;
   registry: SessionRegistry;
+  /** Fleet-global (Redis-backed) presence — the agents://online source of truth. */
+  presence: PresenceService;
   listChanged: ListChangedNotifier;
   /** Coalesced tools/list_changed (federation registers/removes proxy tools). */
   toolsChanged: ListChangedNotifier;
@@ -56,7 +60,7 @@ const protocolNameSchema = z
 
 /** Build a per-session McpServer wired to the shared services. */
 export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
-  const { streams, tasks, protocols, cursors, webhooks, federation, registry, listChanged } = deps;
+  const { streams, tasks, protocols, cursors, webhooks, federation, registry, presence, listChanged } = deps;
 
   const requireAdmin = (): ReturnType<typeof errorResult> | undefined => {
     if (ctx.isAdmin) return undefined;
@@ -64,7 +68,7 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
   };
 
   const mcp = new McpServer(
-    { name: "model-context-stream", version: "0.1.0" },
+    { name: "model-context-stream", version: VERSION },
     {
       capabilities: {
         resources: { subscribe: true, listChanged: true },
@@ -456,7 +460,7 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
     async () => {
       const denied = requireAdmin();
       if (denied) return denied;
-      return json({ webhooks: webhooks.list() });
+      return json({ webhooks: await webhooks.list() });
     },
   );
 
@@ -599,15 +603,16 @@ export function buildMcpServer(deps: Deps, ctx: SessionCtx): McpServer {
       mimeType: "application/json",
     },
     async (uri) => {
-      const active = await tasks.list({ limit: 500 });
-      const roster = registry.all().map((s) => ({
-        agent: s.agentName,
-        sessionId: s.id,
+      // Redis-backed roster: the union of sessions across ALL replicas, not just this one.
+      const [active, sessions] = await Promise.all([tasks.list({ limit: 500 }), presence.roster()]);
+      const roster = sessions.map((s) => ({
+        agent: s.agent,
+        sessionId: s.sessionId,
         connectedAt: s.connectedAt,
-        lastSeenAt: new Date(s.lastSeenAt).toISOString(),
-        subscriptions: [...s.subscriptions.keys()],
+        lastSeenAt: s.lastSeenAt,
+        subscriptions: s.subscriptions,
         claimedTasks: active
-          .filter((t) => (t.status === "claimed" || t.status === "in_progress") && t.claimedBy === s.agentName)
+          .filter((t) => (t.status === "claimed" || t.status === "in_progress") && t.claimedBy === s.agent)
           .map((t) => ({ id: t.id, title: t.title, status: t.status })),
       }));
       return {

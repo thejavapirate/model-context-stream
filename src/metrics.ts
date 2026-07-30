@@ -1,4 +1,6 @@
 import { collectDefaultMetrics, Counter, Gauge, Registry } from "prom-client";
+import type { CoordinatorLease } from "./core/coordinator.js";
+import type { PresenceService } from "./core/presence.js";
 import type { TaskService } from "./core/tasks.js";
 import type { SessionRegistry } from "./mcp/sessions.js";
 
@@ -25,13 +27,34 @@ export const metrics = {
 };
 
 /** Wire scrape-time gauges to live services. Call once at boot. */
-export function initRuntimeGauges(deps: { sessions: SessionRegistry; tasks: TaskService }): void {
+export function initRuntimeGauges(deps: {
+  sessions: SessionRegistry;
+  tasks: TaskService;
+  presence: PresenceService;
+  coordinator: CoordinatorLease;
+}): void {
   new Gauge({
     name: "mcs_connected_sessions",
-    help: "Currently connected MCP sessions",
+    help: "MCP sessions connected to THIS replica",
     registers: [registry],
     collect() {
       this.set(deps.sessions.all().length);
+    },
+  });
+  new Gauge({
+    name: "mcs_presence_sessions",
+    help: "Fleet-wide live MCP sessions (Redis-backed presence, all replicas)",
+    registers: [registry],
+    async collect() {
+      this.set((await deps.presence.roster()).length);
+    },
+  });
+  new Gauge({
+    name: "mcs_coordinator_is_leader",
+    help: "1 when this replica holds the coordinator lease (webhooks + digest scheduling)",
+    registers: [registry],
+    collect() {
+      this.set(deps.coordinator.isLeader ? 1 : 0);
     },
   });
   new Gauge({

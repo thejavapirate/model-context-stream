@@ -26,24 +26,40 @@ export interface WebhookSettings {
   attemptDelaysMs: number[];
   /** Disable the webhook after this many consecutive failed deliveries. */
   disableAfterFailures: number;
+  /** While armed, full re-sync from Redis this often (insurance for missed webhook.added/removed events). */
+  resyncIntervalMs: number;
 }
 
 const DEFAULT_SETTINGS: WebhookSettings = {
   timeoutMs: 10_000,
   attemptDelaysMs: [1_000, 5_000, 25_000],
   disableAfterFailures: 20,
+  resyncIntervalMs: 30_000,
 };
 
 /**
  * The mirror of ingest: events on a stream → HTTP POST to an external URL.
  * Deliveries are per-webhook sequential (promise chain) so a slow endpoint
  * never floods or reorders; failures back off and eventually disable the hook.
+ *
+ * Control plane vs delivery plane: add/remove/list work on ANY replica (Redis
+ * is the registry; changes are announced on stream://system). Delivery is
+ * armed on exactly ONE replica — the coordinator-lease holder calls
+ * activate()/deactivate(). That keeps failure counters single-writer and
+ * preserves the at-most-once, tail-from-now delivery contract. Failover loses
+ * events published during the handover gap (≤ lease TTL + a tick — the same
+ * class of loss as a single-replica restart) and a stalled-but-alive leader
+ * can double-deliver for ≤ one tick: receivers should dedup on event.id.
  */
 export class WebhookService {
+  /** Delivery cache while armed; the Redis hash is the registry of record. */
   private hooks = new Map<string, Webhook>();
   private unsubs = new Map<string, () => void>();
   private queues = new Map<string, Promise<void>>();
   private stopped = false;
+  private armed = false;
+  private systemUnsub?: () => void;
+  private resyncTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly redis: Redis,
@@ -52,24 +68,71 @@ export class WebhookService {
     private readonly settings: WebhookSettings = DEFAULT_SETTINGS,
   ) {}
 
-  async start(): Promise<void> {
-    const raw = await this.redis.hgetall(keys.webhooks);
-    for (const json of Object.values(raw)) {
-      try {
-        const hook = JSON.parse(json) as Webhook;
-        this.hooks.set(hook.id, hook);
-        if (!hook.disabled) await this.arm(hook);
-      } catch {
-        /* skip malformed record */
+  /** Leader-only: arm delivery for every enabled hook and keep the set in sync. */
+  async activate(): Promise<void> {
+    if (this.armed || this.stopped) return;
+    this.armed = true;
+    await this.syncFromRedis();
+    // Targeted sync: add/remove on any replica announces on stream://system.
+    this.systemUnsub = await this.fanout.subscribe(SYSTEM_STREAMS.system, (event) => {
+      if (event.type === "webhook.added" || event.type === "webhook.removed") {
+        void this.syncFromRedis().catch((err) => console.error("[webhooks] sync:", err?.message ?? err));
       }
-    }
+    });
+    this.resyncTimer = setInterval(
+      () => void this.syncFromRedis().catch((err) => console.error("[webhooks] resync:", err?.message ?? err)),
+      this.settings.resyncIntervalMs,
+    );
+    this.resyncTimer.unref();
+  }
+
+  /** Disarm delivery (lease lost or shutting down); drains in-flight queues. */
+  async deactivate(): Promise<void> {
+    if (!this.armed) return;
+    this.armed = false;
+    if (this.resyncTimer) clearInterval(this.resyncTimer);
+    this.systemUnsub?.();
+    this.systemUnsub = undefined;
+    for (const unsub of this.unsubs.values()) unsub();
+    this.unsubs.clear();
+    await Promise.allSettled([...this.queues.values()]);
+    this.queues.clear();
+    this.hooks.clear();
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
-    for (const unsub of this.unsubs.values()) unsub();
-    this.unsubs.clear();
-    await Promise.allSettled([...this.queues.values()]);
+    await this.deactivate();
+  }
+
+  /** Reconcile the armed set with the Redis registry (arm new, disarm removed/disabled). */
+  private async syncFromRedis(): Promise<void> {
+    if (!this.armed) return;
+    const raw = await this.redis.hgetall(keys.webhooks);
+    const seen = new Set<string>();
+    for (const json of Object.values(raw)) {
+      let hook: Webhook;
+      try {
+        hook = JSON.parse(json) as Webhook;
+      } catch {
+        continue; // skip malformed record
+      }
+      seen.add(hook.id);
+      this.hooks.set(hook.id, hook);
+      if (hook.disabled) {
+        this.unsubs.get(hook.id)?.();
+        this.unsubs.delete(hook.id);
+      } else if (!this.unsubs.has(hook.id)) {
+        await this.arm(hook);
+      }
+    }
+    for (const id of [...this.hooks.keys()]) {
+      if (!seen.has(id)) {
+        this.unsubs.get(id)?.();
+        this.unsubs.delete(id);
+        this.hooks.delete(id);
+      }
+    }
   }
 
   async add(input: {
@@ -91,25 +154,48 @@ export class WebhookService {
       consecutiveFailures: 0,
     };
     await this.persist(hook);
-    this.hooks.set(hook.id, hook);
-    await this.arm(hook);
+    if (this.armed) {
+      this.hooks.set(hook.id, hook);
+      await this.arm(hook);
+    }
+    this.announce("webhook.added", hook.id, hook.stream);
     return hook;
   }
 
   async remove(id: string): Promise<boolean> {
-    const existed = this.hooks.delete(id);
+    const existed = (await this.redis.hdel(keys.webhooks, id)) === 1;
     this.unsubs.get(id)?.();
     this.unsubs.delete(id);
-    await this.redis.hdel(keys.webhooks, id);
+    this.hooks.delete(id);
+    if (existed) this.announce("webhook.removed", id);
     return existed;
   }
 
-  /** Secrets redacted — safe to return to agents. */
-  list(): Array<Omit<Webhook, "secret"> & { hasSecret: boolean }> {
-    return [...this.hooks.values()].map(({ secret, ...rest }) => ({
-      ...rest,
-      hasSecret: Boolean(secret),
-    }));
+  /** Registry of record (works on any replica). Secrets redacted — safe to return to agents. */
+  async list(): Promise<Array<Omit<Webhook, "secret"> & { hasSecret: boolean }>> {
+    const raw = await this.redis.hgetall(keys.webhooks);
+    const out: Array<Omit<Webhook, "secret"> & { hasSecret: boolean }> = [];
+    for (const json of Object.values(raw)) {
+      try {
+        const { secret, ...rest } = JSON.parse(json) as Webhook;
+        out.push({ ...rest, hasSecret: Boolean(secret) });
+      } catch {
+        /* skip malformed record */
+      }
+    }
+    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+
+  /** Best-effort: a missed announcement is healed by the leader's periodic resync. */
+  private announce(type: "webhook.added" | "webhook.removed", webhookId: string, stream?: string): void {
+    void this.streams
+      .publish({
+        stream: SYSTEM_STREAMS.system,
+        type,
+        source: "system",
+        payload: { webhookId, ...(stream ? { stream } : {}) },
+      })
+      .catch((err) => console.error("[webhooks] announce failed:", err?.message ?? err));
   }
 
   private async persist(hook: Webhook): Promise<void> {
@@ -135,13 +221,13 @@ export class WebhookService {
 
   private async deliverWithRetry(hookId: string, event: StreamEvent): Promise<void> {
     const hook = this.hooks.get(hookId);
-    if (!hook || hook.disabled || this.stopped) return;
+    if (!hook || hook.disabled || this.stopped || !this.armed) return;
 
     let lastError = "";
     for (let attempt = 0; attempt <= this.settings.attemptDelaysMs.length; attempt++) {
       if (attempt > 0) {
         await sleep(this.settings.attemptDelaysMs[attempt - 1]!);
-        if (this.stopped || this.hooks.get(hookId)?.disabled) return;
+        if (this.stopped || !this.armed || this.hooks.get(hookId)?.disabled) return;
       }
       try {
         await this.deliver(hook, event);

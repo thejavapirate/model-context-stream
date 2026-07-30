@@ -27,7 +27,11 @@ before exposing this service.
 {{- end }}
 {{- if gt (int .Values.replicaCount) 1 }}
 
-WARNING: replicaCount > 1 — MCP sessions are held in server memory. Make sure
-service.sessionAffinity (or cookie-based ingress affinity) is configured, or
-sessions will break when requests land on different pods.
+NOTE: replicaCount > 1 — coordination state (presence, webhooks, digest
+scheduling, tasks, cursors) is Redis-backed and replica-safe: webhooks and
+digests run on a single elected coordinator, and /ingest plus
+GET /streams/:stream are fully stateless on any replica. MCP transport
+sessions, however, still live in pod memory: make sure service.sessionAffinity
+(or cookie-based ingress affinity) is configured for /mcp, or MCP sessions
+will break when requests land on different pods.
 {{- end }}

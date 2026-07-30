@@ -106,7 +106,8 @@ self-federation is refused.
 The mirror of ingest — stream events POSTed to external URLs, HMAC-signed (`X-MCS-Signature`),
 type-filterable, with retries and auto-disable after sustained failure (announced on
 `stream://system`). Admin-managed; note the SSRF implication: only admins can point the server
-at URLs.
+at URLs. Delivery runs on one elected replica (coordinator lease); across a leader failover,
+treat webhooks as at-least-once and dedup on `event.id` — `x-mcs-delivery` is per-attempt.
 
 ### Agent-driven compaction (memory hygiene)
 
@@ -121,6 +122,15 @@ verifies + trims. The fleet maintains its own memory — no LLM key in the serve
 curl -X POST localhost:3000/ingest/deployments \
   -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \
   -d '{"type": "ci.build.failed", "payload": {"repo": "api", "sha": "abc123"}}'
+```
+
+**HTTP catch-up reads** — the mirror of ingest: no MCP session, works against any replica.
+Same semantics as the `read_stream` tool, including durable named cursors (`commit=true`
+advances yours only when events were returned) and `blockMs` long-polling:
+
+```sh
+curl -s "localhost:3000/streams/deployments?cursor=mybot&commit=true" \
+  -H "Authorization: Bearer $TOKEN" -H "X-Agent-Name: mybot"
 ```
 
 ## How it works
@@ -178,12 +188,17 @@ helm install mcs deploy/helm/model-context-stream \
 
 - **Bundled Redis** (StatefulSet + PVC + AOF) by default; set `redis.enabled=false` +
   `externalRedisUrl` for managed Redis.
-- **Prometheus metrics** at `GET /metrics`: `mcs_connected_sessions`, `mcs_events_published_total`,
+- **Prometheus metrics** at `GET /metrics`: `mcs_connected_sessions` (this replica),
+  `mcs_presence_sessions` (fleet-wide), `mcs_coordinator_is_leader`, `mcs_events_published_total`,
   `mcs_tasks{status}`, `mcs_webhook_failed_deliveries_total`, `mcs_streams_compacted_total`,
   plus process defaults. Scrape annotations are one uncomment away in `values.yaml`.
-- **Scaling posture:** MCP sessions live in server memory — ship `replicaCount: 1`, or enable the
-  documented session-affinity blocks (Service `ClientIP` or nginx-ingress cookie affinity) before
-  scaling out. `NOTES.txt` warns on risky configurations at install time.
+- **Scaling posture:** coordination state — presence, the webhook registry, digest scheduling,
+  tasks, cursors, protocols — is Redis-backed and replica-safe. Webhook delivery and digest
+  scheduling run on a single elected coordinator (watch `mcs_coordinator_is_leader`), and
+  `/ingest` + `GET /streams/:stream` are fully stateless on any replica. MCP transport sessions
+  still live in server memory: enable the documented session-affinity blocks for `/mcp` before
+  scaling out. (The MCP 2026-07-28 stateless-transport migration will remove that last
+  constraint; rolling upgrades from pre-0.4.0 replicas briefly double-deliver webhooks.)
 - Hardened defaults: non-root, read-only rootfs, dropped capabilities, liveness/readiness on
   `/healthz` (which requires a Redis round-trip).
 - Package/publish: `helm package deploy/helm/model-context-stream` → `helm push` to any OCI registry.

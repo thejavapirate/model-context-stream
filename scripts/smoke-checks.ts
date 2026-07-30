@@ -74,7 +74,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
 
   try {
     // ── Check 1: publish → live resources/updated notification → replay ────
-    log(`[1/5] live notification on ${streamUri}`);
+    log(`[1/6] live notification on ${streamUri}`);
     await b.client.subscribeResource({ uri: streamUri });
     await b.client.subscribeResource({ uri: "tasks://queue" });
 
@@ -96,7 +96,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: B was notified and replayed A's event (cid + source intact)");
 
     // ── Check 2: claim race — exactly one winner ────────────────────────────
-    log("[2/5] task claim race");
+    log("[2/6] task claim race");
     const created = toolJson<{ id: string }>(
       await a.client.callTool({
         name: "create_task",
@@ -130,7 +130,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: exactly one winner; full lifecycle visible on stream://tasks");
 
     // ── Check 3: HTTP ingest → subscribed agent notified ────────────────────
-    log("[3/5] HTTP ingest");
+    log("[3/6] HTTP ingest");
     const beforeIngest = b.notifications.filter((u) => u === streamUri).length;
     const res = await fetch(`${target.baseUrl}/ingest/${streamName}`, {
       method: "POST",
@@ -152,7 +152,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: external event ingested, fanned out, source stamped");
 
     // ── Check 4: presence — agents://online roster ──────────────────────────
-    log("[4/5] presence roster");
+    log("[4/6] presence roster");
     const roster = await b.client.readResource({ uri: "agents://online" });
     const rosterJson = JSON.parse(
       (roster.contents as Array<{ text?: string }>)[0]!.text ?? "{}",
@@ -165,7 +165,7 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     log("      ok: both agents visible on agents://online");
 
     // ── Check 5: durable cursors ────────────────────────────────────────────
-    log("[5/5] durable cursors");
+    log("[5/6] durable cursors");
     const cursorStream = `${streamName}-cur`;
     for (let i = 0; i < 3; i++) {
       await a.client.callTool({
@@ -199,6 +199,31 @@ export async function runSmokeChecks(target: SmokeTarget, log: (msg: string) => 
     }
     if (secondRead.events[0]!.payload.i !== 3) throw new Error("cursor resumed at the wrong position");
     log("      ok: cursor committed, resumed exactly at the right offset");
+
+    // ── Check 6: stateless REST catch-up (works on any replica, no session) ─
+    log("[6/6] REST catch-up read");
+    const restStream = `${streamName}-rest`;
+    const restHeaders = headers(target, "smoke-rest");
+    const pub = await fetch(`${target.baseUrl}/ingest/${restStream}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...restHeaders },
+      body: JSON.stringify({ type: "rest.ping", payload: { run } }),
+    });
+    if (pub.status !== 201) throw new Error(`REST seed ingest returned ${pub.status}: ${await pub.text()}`);
+
+    const restUrl = `${target.baseUrl}/streams/${restStream}?cursor=rest&commit=true`;
+    const first = await fetch(restUrl, { headers: restHeaders });
+    if (first.status !== 200) throw new Error(`REST read returned ${first.status}: ${await first.text()}`);
+    const firstJson = (await first.json()) as { events: unknown[]; committed: string | null };
+    if (firstJson.events.length !== 1) throw new Error(`REST read: expected 1 event, got ${firstJson.events.length}`);
+    if (!firstJson.committed) throw new Error("REST read did not commit the cursor");
+
+    const second = await fetch(restUrl, { headers: restHeaders });
+    const secondJson = (await second.json()) as { events: unknown[] };
+    if (secondJson.events.length !== 0) {
+      throw new Error(`REST cursor did not advance: second read got ${secondJson.events.length} events`);
+    }
+    log("      ok: REST read + durable cursor advanced statelessly");
 
     log("smoke: ALL CHECKS PASSED");
   } finally {

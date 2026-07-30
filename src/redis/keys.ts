@@ -29,6 +29,12 @@ export const keys = {
   cursors: (agentName: string) => `${PREFIX}:cursors:${agentName}`,
   /** Hash: webhook id -> JSON definition. */
   webhooks: `${PREFIX}:webhooks`,
+  /** String: presence record for one live MCP session (JSON {agent, connectedAt, lastSeenAt, subscriptions}); TTL = liveness. */
+  presence: (sessionId: string) => `${PREFIX}:presence:${sessionId}`,
+  /** ZSet: sessionId -> presence expiry (epoch ms). Index only — the string key's TTL is authoritative; pruned on read. */
+  presenceIndex: `${PREFIX}:presence:index`,
+  /** String: coordinator lease (value = holder instance id, PX TTL). Holder arms webhooks + digest scheduling. */
+  coordinator: `${PREFIX}:coordinator`,
   /** String marker: an open digest task for a stream (value = taskId, with TTL). */
   digestOpen: (stream: string) => `${PREFIX}:digest:open:${stream}`,
   /** Hash: upstream MCP server name -> JSON definition (federation). */
@@ -41,7 +47,7 @@ export const SYSTEM_STREAMS = {
   protocols: "protocols",
   /** Agent connect/disconnect events (presence). */
   agents: "agents",
-  /** Server housekeeping: webhook.disabled, stream.compacted, upstream.* */
+  /** Server housekeeping: webhook.added/removed/disabled, stream.compacted, upstream.* */
   system: "system",
 } as const;
 
