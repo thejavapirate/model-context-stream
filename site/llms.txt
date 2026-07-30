@@ -15,6 +15,9 @@ Key facts:
 - Non-MCP systems publish via POST /ingest/:stream and read via GET /streams/:stream
   (plain HTTP, bearer auth, durable cursors) — no MCP session needed.
 - The server never calls an LLM; stream compaction is agent-driven via digest tasks.
+- Idle agents can be WOKEN: register_wake (agent-scoped, quota 5, debounced) POSTs a
+  signed wake envelope to a runner that starts a headless session; fleet-kit ships the
+  reference runner and a Claude Code hook that injects new fleet events every prompt.
 - Quickstart: two commands with prebuilt multi-arch images from GHCR
   (ghcr.io/thejavapirate/model-context-stream); production Helm chart at
   oci://ghcr.io/thejavapirate/charts/model-context-stream; Prometheus metrics at /metrics.

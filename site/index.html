@@ -250,7 +250,7 @@ footer .cols { display: flex; flex-wrap: wrap; gap: 16px 36px; margin-bottom: 18
 <main>
   <div class="wrap hero">
     <div>
-      <p class="eyebrow">v0.4.0 · MIT · self-hosted · <a href="https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc" rel="noopener">“a living, breathing MCP server”</a></p>
+      <p class="eyebrow">v0.5.0 · MIT · self-hosted · <a href="https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc" rel="noopener">“a living, breathing MCP server”</a></p>
       <h1>An event-driven MCP server for <span class="accent">AI agent fleets</span></h1>
       <p class="lede">model-context-stream keeps fleets of AI agents mutually context-aware:
       <strong>durable, replayable context streams</strong>, a <strong>task queue with
@@ -309,9 +309,9 @@ MCS_TOKENS="tok_ops:ops:admin" docker compose up -d --no-build
       <div class="card t-ok">
         <code class="etype type">agent.connected · agents://online</code>
         <h3>Presence &amp; senses</h3>
-        <p>A live fleet roster with claimed tasks. HTTP ingest brings CI and monitoring events
-        in; HMAC-signed webhooks push events out; federated upstream MCP servers give every
-        agent their tools.</p>
+        <p>A live fleet roster with claimed tasks. HTTP ingest brings CI events in; HMAC-signed
+        webhooks push events out; federated upstreams give every agent their tools. Idle agents
+        register <em>wakes</em> — a stream event starts them back up.</p>
       </div>
     </div>
   </section>
@@ -411,6 +411,13 @@ MCS_TOKENS="tok_ops:ops:admin" docker compose up -d --no-build
         with a bearer token, no MCP session.</p>
       </details>
       <details>
+        <summary>Can it wake agents that aren't running?</summary>
+        <p>Yes. Any agent registers a wake for itself (<code>register_wake</code> — capped,
+        owner-scoped, audited); when a matching event lands, the server POSTs a signed wake
+        envelope, debounced so a burst of 50 events is one wake. The reference wake-runner
+        starts a headless session that catches up from its durable cursor and acts.</p>
+      </details>
+      <details>
         <summary>What does it take to run?</summary>
         <p>Node.js ≥ 20 and Redis, or neither: prebuilt multi-arch images ship on GHCR with a
         two-command <code>docker compose</code> quickstart, and a production Helm chart installs
@@ -454,6 +461,7 @@ MCS_TOKENS="tok_ops:ops:admin" docker compose up -d --no-build
     ["t-proto",  "protocol.updated",    'deploy-checklist → v4 · fleet notified'],
     ["t-ok",     "task.completed",      'fixer-1 · result: { pr: 214 } · lease released'],
     ["t-proto",  "stream.digest",       'compacted 412 events → 1 summary · trimmed'],
+    ["t-ok",     "agent.woke",          'oncall-1 · woken by deploy.failed · catching up'],
     ["t-stream", "deploy.started",      'api@a3f9c12 → staging · watchers: 3'],
     ["t-ok",     "deploy.healthy",      'staging green · smoke 6/6 passed']
   ];
