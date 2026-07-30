@@ -120,12 +120,6 @@ is one wake. With `MCS_URL`+`MCS_TOKEN` set, the runner announces `agent.woke` /
 `agent.slept` on `stream://agents`, so wake activity is itself followable fleet context.
 `GET /` on the runner returns health + budget state. Helm/compose packaging: future work.
 
-## Deliberately not shipped
-
-- **A `Stop`-hook variant** ("new context arrived mid-turn, review before ending") —
-  an agent whose review publishes events can loop itself. Revisit with a once-per-turn
-  guard if real usage asks for it.
-
 ## mcs-standby — self-resuming idle sessions (tier 2.5)
 
 The catch-up hook needs a prompt; `mcs-standby.mjs` removes even that for open-but-idle
