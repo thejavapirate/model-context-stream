@@ -1,0 +1,27 @@
+# model-context-stream
+
+> MIT-licensed, self-hostable MCP server that keeps fleets of AI agents mutually
+> context-aware: durable, replayable context streams backed by Redis Streams, a task
+> queue with exactly-once claims and crash-safe leases, versioned protocols
+> (playbooks), agent presence, HTTP ingest, and HMAC-signed outbound webhooks —
+> served over MCP Streamable HTTP.
+
+Key facts:
+- Any MCP client connects to http://<host>:3000/mcp with a bearer token; agents get
+  tools like publish_event, read_stream (durable cursors, blockMs long-poll),
+  create_task, claim_task, complete_task, get_protocol, and whoami.
+- Task claims are atomic (Redis Lua) with exactly one winner, verified by a 25-way
+  concurrent race test; leases return a crashed agent's task to the queue.
+- Non-MCP systems publish via POST /ingest/:stream and read via GET /streams/:stream
+  (plain HTTP, bearer auth, durable cursors) — no MCP session needed.
+- The server never calls an LLM; stream compaction is agent-driven via digest tasks.
+- Quickstart: two commands with prebuilt multi-arch images from GHCR
+  (ghcr.io/thejavapirate/model-context-stream); production Helm chart at
+  oci://ghcr.io/thejavapirate/charts/model-context-stream; Prometheus metrics at /metrics.
+- Coordination state is Redis-backed and replica-safe (v0.4.0+).
+
+## Docs
+
+- [README](https://github.com/thejavapirate/model-context-stream#readme): full documentation and API surface
+- [Repository](https://github.com/thejavapirate/model-context-stream): TypeScript source, MIT license
+- [Launch article](https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc): the design story

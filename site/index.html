@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>model-context-stream — MCP server for multi-agent coordination</title>
+<meta name="description" content="Open-source, self-hostable MCP server for coordinating AI agent fleets: durable context streams, a task queue with exactly-once claims, versioned protocols. MIT.">
+<link rel="canonical" href="https://thejavapirate.github.io/model-context-stream/">
+<!-- Google Search Console: after adding the URL-prefix property, paste the meta tag here:
+<meta name="google-site-verification" content="PASTE_TOKEN_HERE"> -->
+<meta name="theme-color" content="#10161F">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="model-context-stream">
+<meta property="og:title" content="model-context-stream — MCP server for multi-agent coordination">
+<meta property="og:description" content="Open-source, self-hostable MCP server for coordinating AI agent fleets: durable context streams, a task queue with exactly-once claims, versioned protocols. MIT.">
+<meta property="og:url" content="https://thejavapirate.github.io/model-context-stream/">
+<meta property="og:image" content="https://opengraph.githubassets.com/mcs/thejavapirate/model-context-stream">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="600">
+<meta property="og:image:alt" content="model-context-stream — a living, event-driven MCP server">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="model-context-stream — MCP server for multi-agent coordination">
+<meta name="twitter:description" content="Durable context streams, exactly-once task claims, and versioned protocols for AI agent fleets. Self-hosted, MIT.">
+<meta name="twitter:image" content="https://opengraph.githubassets.com/mcs/thejavapirate/model-context-stream">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://thejavapirate.github.io/model-context-stream/#app",
+      "name": "model-context-stream",
+      "description": "Self-hostable, event-driven MCP server for AI agent fleet coordination: Redis-backed context streams, a task queue with exactly-once claims, and versioned protocols over MCP Streamable HTTP.",
+      "url": "https://thejavapirate.github.io/model-context-stream/",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS, Docker, Kubernetes",
+      "license": "https://spdx.org/licenses/MIT.html",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "softwareHelp": { "@type": "CreativeWork", "url": "https://github.com/thejavapirate/model-context-stream#readme" },
+      "sameAs": ["https://github.com/thejavapirate/model-context-stream"]
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "codeRepository": "https://github.com/thejavapirate/model-context-stream",
+      "programmingLanguage": "TypeScript",
+      "runtimePlatform": "Node.js >= 20",
+      "license": "https://spdx.org/licenses/MIT.html",
+      "targetProduct": { "@id": "https://thejavapirate.github.io/model-context-stream/#app" }
+    }
+  ]
+}
+</script>
+
+<style>
+:root {
+  --bg: #10161F;
+  --panel: #161E2A;
+  --panel-2: #1B2534;
+  --line: #2A3648;
+  --ink: #E8EDF2;
+  --muted: #8D9AAB;
+  --amber: #E8A13D;   /* tasks / signal */
+  --cyan: #56C4D6;    /* streams / presence */
+  --violet: #A78BFA;  /* protocols / digests */
+  --green: #7CC98B;   /* completed / ok */
+  --red: #E07A6B;     /* failures */
+  --display: "Bricolage Grotesque", system-ui, sans-serif;
+  --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--cyan); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
+code, pre, .mono { font-family: var(--mono); }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+/* ── header ─────────────────────────────────────────── */
+.top { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+.brand { font-family: var(--mono); font-size: 15px; color: var(--ink); }
+.brand .p { color: var(--cyan); }
+.top nav { display: flex; gap: 22px; font-size: 14px; }
+.top nav a { color: var(--muted); }
+.top nav a:hover { color: var(--ink); text-decoration: none; }
+
+/* ── hero ───────────────────────────────────────────── */
+.hero { display: grid; grid-template-columns: 11fr 9fr; gap: 48px; align-items: center; padding: 56px 0 72px; }
+.eyebrow { font-family: var(--mono); font-size: 13px; color: var(--amber); letter-spacing: .04em; }
+.eyebrow a { color: inherit; }
+h1 {
+  font-family: var(--display); font-weight: 800;
+  font-size: clamp(34px, 5vw, 54px); line-height: 1.05;
+  letter-spacing: -0.02em; margin: 14px 0 18px;
+}
+h1 .accent { color: var(--cyan); }
+.lede { color: var(--muted); font-size: 17px; max-width: 56ch; }
+.lede strong { color: var(--ink); font-weight: 600; }
+.ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
+.btn {
+  display: inline-block; padding: 11px 20px; border-radius: 6px;
+  font-size: 15px; font-weight: 600; border: 1px solid var(--line);
+}
+.btn.primary { background: var(--amber); border-color: var(--amber); color: #17130A; }
+.btn.primary:hover { background: #F0B054; text-decoration: none; }
+.btn.ghost { color: var(--ink); }
+.btn.ghost:hover { border-color: var(--muted); text-decoration: none; }
+.quick { margin-top: 26px; }
+.quick pre {
+  background: #0C1119; border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px 16px; font-size: 13px; line-height: 1.7; overflow-x: auto; color: #C7D2DF;
+}
+.quick pre .c { color: #5C6B7E; }
+.quick pre .g { color: var(--green); }
+
+/* ── the living stream (signature) ──────────────────── */
+.stream {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.35);
+}
+.stream-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+  font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+}
+.stream-bar .uri { color: var(--cyan); }
+.presence { display: flex; align-items: center; gap: 7px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.dot.pulse { animation: pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.stream-log {
+  list-style: none; padding: 10px 0; height: 400px; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: flex-end;
+}
+.stream-log li {
+  display: grid; grid-template-columns: 118px 1fr; gap: 12px;
+  padding: 7px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+}
+.stream-log .id { color: #55647A; }
+.stream-log .type { font-weight: 500; }
+.stream-log .body { color: var(--muted); }
+.t-stream .type { color: var(--cyan); }
+.t-task .type { color: var(--amber); }
+.t-proto .type { color: var(--violet); }
+.t-ok .type { color: var(--green); }
+.t-err .type { color: var(--red); }
+.stream-log li.appended { animation: land .45s ease-out; }
+@keyframes land { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) {
+  .stream-log li.appended { animation: none; }
+  .dot.pulse { animation: none; }
+  html { scroll-behavior: auto; }
+}
+
+/* ── sections ───────────────────────────────────────── */
+section { padding: 64px 0; border-top: 1px solid var(--line); }
+h2 {
+  font-family: var(--display); font-weight: 700;
+  font-size: clamp(24px, 3.2vw, 32px); letter-spacing: -0.01em; margin-bottom: 10px;
+}
+.sub { color: var(--muted); max-width: 62ch; margin-bottom: 36px; }
+.sub a { color: var(--cyan); }
+
+.cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 22px; transition: border-color .15s ease;
+}
+.card:hover { border-color: #3D4E68; }
+.card .etype { font-family: var(--mono); font-size: 12.5px; margin-bottom: 12px; display: block; }
+.card h3 { font-family: var(--display); font-size: 19px; font-weight: 700; margin-bottom: 8px; }
+.card p { color: var(--muted); font-size: 14.5px; }
+.card p code { font-size: 12.5px; color: var(--ink); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+
+/* ── comparison table ───────────────────────────────── */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 14px; }
+th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+thead th { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--muted); background: var(--panel); }
+tbody th { font-weight: 600; color: var(--ink); }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+td.yes { color: var(--green); }
+td.no { color: #6B7A8E; }
+td.part { color: var(--amber); }
+.mcs-col { background: rgba(86, 196, 214, .06); }
+.fineprint { color: #5C6B7E; font-size: 12.5px; margin-top: 12px; }
+
+/* ── faq ────────────────────────────────────────────── */
+.faq { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 40px; }
+.faq details { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.faq summary {
+  cursor: pointer; padding: 12px 0; font-weight: 600; font-size: 15.5px; list-style: none;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+}
+.faq summary::after { content: "+"; color: var(--amber); font-family: var(--mono); flex-shrink: 0; }
+.faq details[open] summary::after { content: "–"; }
+.faq details p { color: var(--muted); font-size: 14.5px; padding: 0 0 16px; }
+.faq details p code { font-size: 12.5px; }
+
+/* ── ops strip + footer ─────────────────────────────── */
+.ops { display: flex; flex-wrap: wrap; gap: 12px 36px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.ops span b { color: var(--ink); font-weight: 500; }
+footer { border-top: 1px solid var(--line); padding: 36px 0 56px; color: var(--muted); font-size: 14px; }
+footer .cols { display: flex; flex-wrap: wrap; gap: 16px 36px; margin-bottom: 18px; }
+
+@media (max-width: 880px) {
+  .hero { grid-template-columns: 1fr; padding: 32px 0 48px; }
+  .cards { grid-template-columns: 1fr; }
+  .faq { grid-template-columns: 1fr; }
+  .top nav { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="wrap top">
+  <span class="brand"><span class="p">stream://</span>model-context-stream</span>
+  <nav aria-label="Site">
+    <a href="#primitives">Primitives</a>
+    <a href="#compare">Compare</a>
+    <a href="#faq">FAQ</a>
+    <a href="https://github.com/thejavapirate/model-context-stream" rel="noopener" data-goatcounter-click="ext-github-nav" data-goatcounter-no-session="1">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div>
+      <p class="eyebrow">v0.4.0 · MIT · self-hosted · <a href="https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc" rel="noopener">“a living, breathing MCP server”</a></p>
+      <h1>An event-driven MCP server for <span class="accent">AI agent fleets</span></h1>
+      <p class="lede">model-context-stream keeps fleets of AI agents mutually context-aware:
+      <strong>durable, replayable context streams</strong>, a <strong>task queue with
+      exactly-once claims</strong>, and <strong>versioned protocols</strong> — served over MCP
+      Streamable HTTP, backed by Redis Streams. When any agent publishes, every subscribed
+      agent knows.</p>
+      <div class="ctas">
+        <a class="btn primary" href="https://github.com/thejavapirate/model-context-stream" rel="noopener" data-goatcounter-click="ext-github-hero" data-goatcounter-no-session="1">View on GitHub</a>
+        <a class="btn ghost" href="#quickstart">Quickstart</a>
+      </div>
+      <div class="quick" id="quickstart">
+        <pre><code><span class="c"># no clone needed — prebuilt images on GHCR</span>
+curl -sO https://raw.githubusercontent.com/thejavapirate/model-context-stream/main/docker-compose.yml
+MCS_TOKENS="tok_ops:ops:admin" docker compose up -d --no-build
+<span class="c"># connect any MCP client to</span> <span class="g">http://localhost:3000/mcp</span></code></pre>
+      </div>
+    </div>
+
+    <div class="stream" aria-label="Live demonstration of a context stream">
+      <div class="stream-bar">
+        <span class="uri">stream://team</span>
+        <span class="presence"><span class="dot pulse" aria-hidden="true"></span><span id="presence-label">4 agents following</span></span>
+      </div>
+      <ul class="stream-log" id="stream-log"></ul>
+    </div>
+  </div>
+
+  <section id="primitives" class="wrap">
+    <h2>Four primitives, one shared log</h2>
+    <p class="sub">Everything an agent fleet needs to stay coordinated is an event on a stream —
+    including the coordination itself. Each card is headed by the real event type it emits.</p>
+    <div class="cards">
+      <div class="card t-stream">
+        <code class="etype type">event.published → resources/updated</code>
+        <h3>Context streams</h3>
+        <p>Append-only event logs over Redis Streams. Subscribers get MCP
+        <code>resources/updated</code> pushes (debounced 200&hairsp;ms); a fresh agent replays
+        history and is caught up — the entry id is the cursor. Durable per-agent cursors
+        survive reconnects.</p>
+      </div>
+      <div class="card t-task">
+        <code class="etype type">task.claimed — exactly one winner</code>
+        <h3>Task queue</h3>
+        <p>Atomic claims via Redis Lua with crash-safe leases (~5&hairsp;min, heartbeat to keep).
+        Proven by a 25-way concurrent claim race in the test suite: one winner, every time.
+        A crashed agent's task returns to the queue automatically.</p>
+      </div>
+      <div class="card t-proto">
+        <code class="etype type">protocol.updated → v4</code>
+        <h3>Versioned protocols</h3>
+        <p>Living playbooks. Update a protocol once; every subscribed agent is notified and
+        follows the new version. Pin <code>protocol://name/v3</code> when you need
+        immutability.</p>
+      </div>
+      <div class="card t-ok">
+        <code class="etype type">agent.connected · agents://online</code>
+        <h3>Presence &amp; senses</h3>
+        <p>A live fleet roster with claimed tasks. HTTP ingest brings CI and monitoring events
+        in; HMAC-signed webhooks push events out; federated upstream MCP servers give every
+        agent their tools.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare" class="wrap">
+    <h2>How it compares</h2>
+    <p class="sub">Multi-agent coordination has a few common answers. This is where each one
+    stands as of July 2026.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col"></th>
+            <th scope="col" class="mcs-col">model-context-stream</th>
+            <th scope="col">Claude Code Agent Teams</th>
+            <th scope="col">DIY Redis pub/sub</th>
+            <th scope="col">MCP tasks extension</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Durable, replayable history</th>
+            <td class="yes mcs-col">Yes — streams + cursors</td>
+            <td class="no">No — local files, cleared at session end</td>
+            <td class="no">No — pub/sub is fire-and-forget</td>
+            <td class="no">No — call-scoped handles</td>
+          </tr>
+          <tr>
+            <th scope="row">Exactly-once task claims</th>
+            <td class="yes mcs-col">Yes — atomic Lua + leases</td>
+            <td class="part">File locks, single machine</td>
+            <td class="part">Build it yourself</td>
+            <td class="no">Not specified</td>
+          </tr>
+          <tr>
+            <th scope="row">Cross-machine fleet</th>
+            <td class="yes mcs-col">Yes</td>
+            <td class="no">No — one machine</td>
+            <td class="yes">Yes</td>
+            <td class="no">Single client–server call</td>
+          </tr>
+          <tr>
+            <th scope="row">Works with any MCP client</th>
+            <td class="yes mcs-col">Yes — any harness, any vendor</td>
+            <td class="no">Claude Code only</td>
+            <td class="no">No — custom client code</td>
+            <td class="yes">Yes</td>
+          </tr>
+          <tr>
+            <th scope="row">External ingest (CI, webhooks)</th>
+            <td class="yes mcs-col">Yes — HTTP in, signed webhooks out</td>
+            <td class="no">No</td>
+            <td class="part">Build it yourself</td>
+            <td class="no">No</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="fineprint">Agent Teams facts per its official docs (experimental, v2.1.x, July 2026);
+    the MCP tasks extension is <code>io.modelcontextprotocol/tasks</code> from the 2026-07-28 spec.
+    Corrections welcome — <a href="https://github.com/thejavapirate/model-context-stream/issues" rel="noopener">open an issue</a>.</p>
+  </section>
+
+  <section id="faq" class="wrap">
+    <h2>Questions agents and humans ask</h2>
+    <p class="sub">The short answers, in plain text on purpose.</p>
+    <div class="faq">
+      <details open>
+        <summary>What is model-context-stream?</summary>
+        <p>An MIT-licensed, self-hostable MCP server that coordinates fleets of AI agents through
+        shared, durable context streams — plus a task queue with exactly-once claims and
+        versioned protocols. It runs on Node.js and Redis; agents connect over MCP Streamable
+        HTTP.</p>
+      </details>
+      <details>
+        <summary>How do agents share context?</summary>
+        <p>Any agent (or CI system) publishes an event to a named stream. Every subscribed agent
+        receives an MCP <code>resources/updated</code> notification and re-reads the stream.
+        Agents that were offline replay from their durable cursor — nothing is missed.</p>
+      </details>
+      <details>
+        <summary>How do agents avoid doing the same work twice?</summary>
+        <p>Tasks are claimed through an atomic Redis Lua script — exactly one claimant, verified
+        by a 25-way race test. Claims carry leases: if an agent crashes, its task returns to the
+        queue within about five minutes.</p>
+      </details>
+      <details>
+        <summary>Does the server call an LLM?</summary>
+        <p>No. There is no LLM key in the server. Even stream compaction is agent-driven: the
+        server posts a digest task on its own queue and a connected agent summarizes, then the
+        server verifies and trims.</p>
+      </details>
+      <details>
+        <summary>Do publishers need to speak MCP?</summary>
+        <p>No. <code>POST /ingest/:stream</code> accepts events from CI, monitoring, or any
+        webhook, and <code>GET /streams/:stream</code> reads with durable cursors — plain HTTP
+        with a bearer token, no MCP session.</p>
+      </details>
+      <details>
+        <summary>What does it take to run?</summary>
+        <p>Node.js ≥ 20 and Redis, or neither: prebuilt multi-arch images ship on GHCR with a
+        two-command <code>docker compose</code> quickstart, and a production Helm chart installs
+        from an OCI registry with Prometheus metrics built in.</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>Built to operate</h2>
+    <div class="ops">
+      <span><b>Image</b> ghcr.io/thejavapirate/model-context-stream</span>
+      <span><b>Chart</b> oci://ghcr.io/thejavapirate/charts</span>
+      <span><b>Metrics</b> Prometheus at /metrics</span>
+      <span><b>Replicas</b> Redis-backed coordination state</span>
+      <span><b>License</b> MIT</span>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <a href="https://github.com/thejavapirate/model-context-stream" rel="noopener" data-goatcounter-click="ext-github-footer" data-goatcounter-no-session="1">GitHub repository</a>
+      <a href="https://github.com/thejavapirate/model-context-stream#readme" rel="noopener">Documentation</a>
+      <a href="https://medium.com/@thejavapirate/a-living-breathing-mcp-server-fda569a64edc" rel="noopener">Launch article</a>
+      <a href="https://github.com/thejavapirate/model-context-stream/blob/main/LICENSE" rel="noopener">MIT License</a>
+    </div>
+    <p>Built in the open. The stream above is a demonstration — run the real one with two commands.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var EVENTS = [
+    ["t-stream", "ci.build.failed",     'repo: "api" · sha: a3f9c12 — via /ingest'],
+    ["t-ok",     "agent.connected",     'scout-2 joined · 5 agents following'],
+    ["t-task",   "task.created",        '"Investigate failing auth test" · priority 2'],
+    ["t-task",   "task.claimed",        'fixer-1 won the claim — exactly one winner'],
+    ["t-stream", "finding.discovered",  'flaky mock in auth.spec.ts:88 — fix inbound'],
+    ["t-proto",  "protocol.updated",    'deploy-checklist → v4 · fleet notified'],
+    ["t-ok",     "task.completed",      'fixer-1 · result: { pr: 214 } · lease released'],
+    ["t-proto",  "stream.digest",       'compacted 412 events → 1 summary · trimmed'],
+    ["t-stream", "deploy.started",      'api@a3f9c12 → staging · watchers: 3'],
+    ["t-ok",     "deploy.healthy",      'staging green · smoke 6/6 passed']
+  ];
+  var log = document.getElementById("stream-log");
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var MAX = 9, seq = 0;
+  var baseId = Date.now();
+
+  function entry(e, animate) {
+    var li = document.createElement("li");
+    li.className = e[0] + (animate ? " appended" : "");
+    li.innerHTML = '<span class="id">' + (baseId + seq++ * 1873) + "-0</span>" +
+      '<span><span class="type">' + e[1] + "</span><br><span class=\"body\">" + e[2] + "</span></span>";
+    log.appendChild(li);
+    while (log.children.length > MAX) log.removeChild(log.firstChild);
+  }
+
+  var i = 0;
+  for (; i < (reduced ? EVENTS.length : 4); i++) entry(EVENTS[i], false);
+  if (reduced) return; // static log for reduced motion
+
+  setInterval(function () {
+    if (document.hidden) return;
+    entry(EVENTS[i % EVENTS.length], true);
+    i++;
+  }, 2600);
+})();
+</script>
+<!-- GoatCounter: privacy-friendly, no cookies, no banner needed. count.js is
+     self-hosted (ISC license) so no third-party script executes. Register the
+     code "mcstream" at goatcounter.com (or change the endpoint here). -->
+<script data-goatcounter="https://mcstream.goatcounter.com/count"
+        async src="count.js"></script>
+</body>
+</html>

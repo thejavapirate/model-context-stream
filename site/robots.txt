@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://thejavapirate.github.io/model-context-stream/sitemap.xml

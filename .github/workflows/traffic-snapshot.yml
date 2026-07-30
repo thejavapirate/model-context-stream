@@ -1,0 +1,42 @@
+name: Snapshot repo traffic metrics
+
+# GitHub's traffic API only keeps a 14-day rolling window — this snapshots it
+# weekly into metrics/ so growth history survives.
+#
+# NOTE: if runs fail with 403 on the traffic endpoints, the default GITHUB_TOKEN
+# lacks traffic access on your plan — create a classic PAT with `repo` scope and
+# save it as the TRAFFIC_PAT secret; the workflow prefers it automatically.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC, safely inside the 14-day window
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch traffic + release stats
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p metrics
+          day="$(date -u +%F)"
+          for ep in views clones popular/referrers popular/paths; do
+            name="${ep//\//-}"
+            gh api "repos/${GITHUB_REPOSITORY}/traffic/${ep}" > "metrics/${day}-${name}.json"
+          done
+          gh api "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '[.[] | {tag: .tag_name, published: .published_at, assets: [.assets[] | {name, download_count}]}]' \
+            > "metrics/${day}-releases.json"
+      - name: Commit snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add metrics/
+          git diff --cached --quiet || git commit -m "metrics: traffic snapshot $(date -u +%F)"
+          git push
